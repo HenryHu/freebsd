@@ -26,8 +26,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -82,7 +80,7 @@ ATF_TC_BODY(socket_afinet_bind_ok, tc)
 	bzero(&sin, sizeof(sin));
 	sin.sin_family = AF_INET;
 	sin.sin_len = sizeof(sin);
-	sin.sin_port = htons(6666);
+	sin.sin_port = htons(0);
 	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	rc = bind(sd, (struct sockaddr *)&sin, sizeof(sin));
 	ATF_CHECK_EQ(0, rc);
@@ -95,6 +93,7 @@ ATF_TC_BODY(socket_afinet_poll_no_rdhup, tc)
 {
 	int ss, ss2, cs, rc;
 	struct sockaddr_in sin;
+	socklen_t slen;
 	struct pollfd pfd;
 	int one = 1;
 
@@ -108,11 +107,14 @@ ATF_TC_BODY(socket_afinet_poll_no_rdhup, tc)
 	bzero(&sin, sizeof(sin));
 	sin.sin_family = AF_INET;
 	sin.sin_len = sizeof(sin);
-	sin.sin_port = htons(6666);
+	sin.sin_port = htons(0);
 	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	rc = bind(ss, (struct sockaddr *)&sin, sizeof(sin));
 	ATF_CHECK_EQ(0, rc);
 	rc = listen(ss, 1);
+	ATF_CHECK_EQ(0, rc);
+	slen = sizeof(sin);
+	rc = getsockname(ss, (struct sockaddr *)&sin, &slen);
 	ATF_CHECK_EQ(0, rc);
 
 	/* Client connects, server accepts. */
@@ -154,6 +156,7 @@ ATF_TC_BODY(socket_afinet_poll_rdhup, tc)
 {
 	int ss, ss2, cs, rc;
 	struct sockaddr_in sin;
+	socklen_t slen;
 	struct pollfd pfd;
 	char buffer;
 	int one = 1;
@@ -168,11 +171,14 @@ ATF_TC_BODY(socket_afinet_poll_rdhup, tc)
 	bzero(&sin, sizeof(sin));
 	sin.sin_family = AF_INET;
 	sin.sin_len = sizeof(sin);
-	sin.sin_port = htons(6666);
+	sin.sin_port = htons(0);
 	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	rc = bind(ss, (struct sockaddr *)&sin, sizeof(sin));
 	ATF_CHECK_EQ(0, rc);
 	rc = listen(ss, 1);
+	ATF_CHECK_EQ(0, rc);
+	slen = sizeof(sin);
+	rc = getsockname(ss, (struct sockaddr *)&sin, &slen);
 	ATF_CHECK_EQ(0, rc);
 
 	/* Client connects, server accepts. */
@@ -232,6 +238,7 @@ ATF_TC_WITHOUT_HEAD(socket_afinet_stream_reconnect);
 ATF_TC_BODY(socket_afinet_stream_reconnect, tc)
 {
 	struct sockaddr_in sin;
+	socklen_t slen;
 	int ss, cs, rc;
 
 	/*
@@ -245,11 +252,14 @@ ATF_TC_BODY(socket_afinet_stream_reconnect, tc)
 	bzero(&sin, sizeof(sin));
 	sin.sin_family = AF_INET;
 	sin.sin_len = sizeof(sin);
-	sin.sin_port = htons(6666);
+	sin.sin_port = htons(0);
 	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	rc = bind(ss, (struct sockaddr *)&sin, sizeof(sin));
 	ATF_CHECK_EQ(0, rc);
 	rc = listen(ss, 1);
+	ATF_CHECK_EQ(0, rc);
+	slen = sizeof(sin);
+	rc = getsockname(ss, (struct sockaddr *)&sin, &slen);
 	ATF_CHECK_EQ(0, rc);
 
 	/* Client connects, shuts down. */

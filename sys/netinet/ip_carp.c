@@ -28,11 +28,7 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "opt_netlink.h"
-
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bpf.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
@@ -2159,6 +2155,7 @@ carp_sc_state(struct carp_softc *sc)
 #endif
 		carp_set_state(sc, INIT, "hardware interface down");
 		carp_setrun(sc, 0);
+		carp_delroute(sc);
 		if (!sc->sc_suppress)
 			carp_demote_adj(V_carp_ifdown_adj, "interface down");
 		sc->sc_suppress = 1;

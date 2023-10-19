@@ -59,8 +59,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -1334,8 +1332,10 @@ uipc_sosend_dgram(struct socket *so, struct sockaddr *addr, struct uio *uio,
 	} else {
 		soroverflow_locked(so2);
 		error = ENOBUFS;
-		if (f->m_next->m_type == MT_CONTROL)
-			unp_scan(f->m_next, unp_freerights);
+		if (f->m_next->m_type == MT_CONTROL) {
+			c = f->m_next;
+			f->m_next = NULL;
+		}
 	}
 
 	if (addr != NULL)

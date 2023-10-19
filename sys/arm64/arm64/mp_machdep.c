@@ -33,8 +33,6 @@
 #include "opt_platform.h"
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -147,7 +145,7 @@ static volatile int aps_started;
 static volatile int aps_ready;
 
 /* Temporary variables for init_secondary()  */
-void *dpcpu[MAXCPU - 1];
+static void *dpcpu[MAXCPU - 1];
 
 static bool
 is_boot_cpu(uint64_t target_cpu)
@@ -274,7 +272,7 @@ init_secondary(uint64_t cpu)
 	cpu_initclocks_ap();
 
 #ifdef VFP
-	vfp_init();
+	vfp_init_secondary();
 #endif
 
 	dbg_init();

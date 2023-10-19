@@ -25,8 +25,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -213,7 +211,9 @@ setvxlan_local(if_ctx *ctx, const char *addr, int dummy __unused)
 {
 	struct ifvxlancmd cmd;
 	struct addrinfo *ai;
+#if (defined INET || defined INET6)
 	struct sockaddr *sa;
+#endif
 	int error;
 
 	bzero(&cmd, sizeof(cmd));
@@ -222,7 +222,9 @@ setvxlan_local(if_ctx *ctx, const char *addr, int dummy __unused)
 		errx(1, "error in parsing local address string: %s",
 		    gai_strerror(error));
 
+#if (defined INET || defined INET6)
 	sa = ai->ai_addr;
+#endif
 
 	switch (ai->ai_family) {
 #ifdef INET
@@ -273,7 +275,9 @@ setvxlan_remote(if_ctx *ctx, const char *addr, int dummy __unused)
 {
 	struct ifvxlancmd cmd;
 	struct addrinfo *ai;
+#if (defined INET || defined INET6)
 	struct sockaddr *sa;
+#endif
 	int error;
 
 	bzero(&cmd, sizeof(cmd));
@@ -282,7 +286,9 @@ setvxlan_remote(if_ctx *ctx, const char *addr, int dummy __unused)
 		errx(1, "error in parsing remote address string: %s",
 		    gai_strerror(error));
 
+#if (defined INET || defined INET6)
 	sa = ai->ai_addr;
+#endif
 
 	switch (ai->ai_family) {
 #ifdef INET
@@ -333,7 +339,9 @@ setvxlan_group(if_ctx *ctx, const char *addr, int dummy __unused)
 {
 	struct ifvxlancmd cmd;
 	struct addrinfo *ai;
+#if (defined INET || defined INET6)
 	struct sockaddr *sa;
+#endif
 	int error;
 
 	bzero(&cmd, sizeof(cmd));
@@ -342,7 +350,9 @@ setvxlan_group(if_ctx *ctx, const char *addr, int dummy __unused)
 		errx(1, "error in parsing group address string: %s",
 		    gai_strerror(error));
 
+#if (defined INET || defined INET6)
 	sa = ai->ai_addr;
+#endif
 
 	switch (ai->ai_family) {
 #ifdef INET

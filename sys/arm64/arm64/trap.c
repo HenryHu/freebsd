@@ -28,8 +28,6 @@
 #include "opt_ddb.h"
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/asan.h>
@@ -153,7 +151,7 @@ cpu_fetch_syscall_args(struct thread *td)
 	}
 
 	if (__predict_false(sa->code >= p->p_sysent->sv_size))
-		sa->callp = &p->p_sysent->sv_table[0];
+		sa->callp = &nosys_sysent;
 	else
 		sa->callp = &p->p_sysent->sv_table[sa->code];
 
@@ -279,6 +277,7 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	} else if (!ADDR_IS_CANONICAL(far)) {
 		/* We received a TBI/PAC/etc. fault from the kernel */
 		error = KERN_INVALID_ADDRESS;
+		pcb = td->td_pcb;
 		goto bad_far;
 	} else if (ADDR_IS_KERNEL(far)) {
 		/*

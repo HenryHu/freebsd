@@ -25,12 +25,8 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_netlink.h"
 
 #include <sys/types.h>
 #include <sys/ck.h>
@@ -325,7 +321,6 @@ rtnl_if_flags_to_linux(unsigned int if_flags)
 		case IFF_STICKYARP:
 		case IFF_DYING:
 		case IFF_RENAMING:
-		case IFF_NOGROUP:
 			/* No Linux analogue */
 			break;
 		case IFF_MULTICAST:
