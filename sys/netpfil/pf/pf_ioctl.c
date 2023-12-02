@@ -373,6 +373,11 @@ pfattach_vnet(void)
 	my_timeout[PFTM_TCP_CLOSING] = PFTM_TCP_CLOSING_VAL;
 	my_timeout[PFTM_TCP_FIN_WAIT] = PFTM_TCP_FIN_WAIT_VAL;
 	my_timeout[PFTM_TCP_CLOSED] = PFTM_TCP_CLOSED_VAL;
+	my_timeout[PFTM_SCTP_FIRST_PACKET] = PFTM_TCP_FIRST_PACKET_VAL;
+	my_timeout[PFTM_SCTP_OPENING] = PFTM_TCP_OPENING_VAL;
+	my_timeout[PFTM_SCTP_ESTABLISHED] = PFTM_TCP_ESTABLISHED_VAL;
+	my_timeout[PFTM_SCTP_CLOSING] = PFTM_TCP_CLOSING_VAL;
+	my_timeout[PFTM_SCTP_CLOSED] = PFTM_TCP_CLOSED_VAL;
 	my_timeout[PFTM_UDP_FIRST_PACKET] = PFTM_UDP_FIRST_PACKET_VAL;
 	my_timeout[PFTM_UDP_SINGLE] = PFTM_UDP_SINGLE_VAL;
 	my_timeout[PFTM_UDP_MULTIPLE] = PFTM_UDP_MULTIPLE_VAL;
@@ -5913,6 +5918,7 @@ pf_getstatus(struct pfioc_nv *nv)
 	nvlist_add_number(nvl, "reass", V_pf_status.reass);
 	nvlist_add_bool(nvl, "syncookies_active",
 	    V_pf_status.syncookies_active);
+	nvlist_add_number(nvl, "halfopen_states", V_pf_status.states_halfopen);
 
 	/* counters */
 	error = pf_add_status_counters(nvl, "counters", V_pf_status.counters,
