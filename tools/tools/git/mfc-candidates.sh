@@ -41,7 +41,7 @@ if [ "${repo}" = "ports.git" ]; then
 	qtr=$(((month-1) / 3 + 1))
 	to_branch="freebsd/${year}Q${qtr}"
 elif [ "${repo}" = "src.git" ]; then
-	to_branch=freebsd/stable/13
+	to_branch=freebsd/stable/14
 	# If pwd is a stable or release branch tree, default to it.
 	cur_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
 	case $cur_branch in
@@ -118,7 +118,7 @@ fi
 authorarg=
 if [ -n "$author" ]; then
 	# Match user ID in the email portion of author or committer
-	authorarg="--author <${author}@ --committer <${author}@"
+	authorarg="--committer <${author}@"
 fi
 
 # Commits in from_branch after branch point

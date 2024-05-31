@@ -15,6 +15,8 @@ SRCS+=	__getosreldate.c \
 	_rand48.c \
 	_spinlock_stub.c \
 	_thread_init.c \
+	aio_read2.c \
+	aio_write2.c \
 	alarm.c \
 	arc4random.c \
 	arc4random-compat.c \
@@ -102,6 +104,7 @@ SRCS+=	__getosreldate.c \
 	lockf.c \
 	lrand48.c \
 	memalign.c \
+	memfd_create.c \
 	mrand48.c \
 	nftw.c \
 	nftw-compat11.c \

@@ -21,6 +21,8 @@
         ..
         expr
         ..
+        hostname
+        ..
         ln
         ..
         ls
@@ -149,6 +151,8 @@
                     multiaggs
                     ..
                     offsetof
+                    ..
+                    oformat
                     ..
                     operators
                     ..
@@ -433,9 +437,13 @@
             atf-sh
             ..
         ..
+        nuageinit
+        ..
         rc
         ..
         rtld-elf
+            rtld_deepbind
+            ..
         ..
         tftpd
         ..
@@ -1081,6 +1089,10 @@
         ..
         locale
         ..
+        lockf
+        ..
+        lorder
+        ..
         m4
         ..
         mkimg
@@ -1125,6 +1137,8 @@
         ..
         tftp
         ..
+        touch
+        ..
         tr
         ..
         truncate
@@ -1168,8 +1182,6 @@
         jail
         ..
         makefs
-        ..
-        mixer
         ..
         newsyslog
         ..

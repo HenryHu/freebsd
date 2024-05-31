@@ -678,7 +678,6 @@ options 	TCP_OFFLOAD		# TCP offload support.
 options  	TCP_RFC7413		# TCP Fast Open
 
 options  	TCPHPTS
-makeoptions	WITH_EXTRA_TCP_STACKS=1	# RACK and BBR TCP kernel modules
 
 # In order to enable IPSEC you MUST also add device crypto to 
 # your kernel configuration
@@ -690,6 +689,9 @@ options 	IPSEC			#IP security (requires device crypto)
 options 	IPSEC_SUPPORT
 #options 	IPSEC_DEBUG		#debug for IP security
 
+# Alternative TCP stacks
+options 	TCP_BBR
+options 	TCP_RACK
 
 # TLS framing and encryption/decryption of data over TCP sockets.
 options 	KERN_TLS		# TLS transmit and receive offload
@@ -2742,7 +2744,7 @@ options 	MAXFILES=999
 options 	RANDOM_ENABLE_UMA	# slab allocator
 
 # Select this to allow high-rate but potentially expensive
-# harvesting of of the m_next pointer in the mbuf. Note that
+# harvesting of the m_next pointer in the mbuf. Note that
 # the m_next pointer is NULL except when receiving > 4K
 # jumbo frames or sustained bursts by way of LRO. Thus in
 # the common case it is stirring zero in to the entropy

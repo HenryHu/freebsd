@@ -475,6 +475,12 @@ after_sack_rexmit:
 	      (tp->t_tfo_client_cookie_len == 0)) ||
 	     (flags & TH_RST)))
 		len = 0;
+
+	/* Without fast-open there should never be data sent on a SYN. */
+	if ((flags & TH_SYN) && !(tp->t_flags & TF_FASTOPEN)) {
+		len = 0;
+	}
+
 	if (len <= 0) {
 		/*
 		 * If FIN has been sent but not acked,
@@ -1654,7 +1660,7 @@ timer:
 		    ((flags & TH_SYN) == 0) &&
 		    (error != EPERM)) {
 			if (sack_rxmit) {
-				p->rxmit -= len;
+				p->rxmit = SEQ_MIN(p->end, p->rxmit) - len;
 				tp->sackhint.sack_bytes_rexmit -= len;
 				KASSERT(tp->sackhint.sack_bytes_rexmit >= 0,
 				    ("sackhint bytes rtx >= 0"));
@@ -1665,6 +1671,8 @@ timer:
 				if (flags & TH_FIN)
 					tp->snd_nxt--;
 			}
+			if (IN_RECOVERY(tp->t_flags))
+				tp->sackhint.prr_out -= len;
 		}
 		SOCKBUF_UNLOCK_ASSERT(&so->so_snd);	/* Check gotos. */
 		switch (error) {
@@ -2089,7 +2097,7 @@ tcp_m_copym(struct mbuf *m, int32_t off0, int32_t *plen,
 		}
 		n->m_len = mlen;
 		len_cp += n->m_len;
-		if (m->m_flags & (M_EXT|M_EXTPG)) {
+		if (m->m_flags & (M_EXT | M_EXTPG)) {
 			n->m_data = m->m_data + off;
 			mb_dupcl(n, m);
 		} else

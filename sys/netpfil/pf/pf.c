@@ -1325,6 +1325,7 @@ keyattach:
 						    sk : NULL);
 						printf("\n");
 					}
+					s->timeout = PFTM_UNLINKED;
 					PF_HASHROW_UNLOCK(ih);
 					KEYS_UNLOCK();
 					uma_zfree(V_pf_state_key_z, sk);
@@ -1391,6 +1392,8 @@ pf_detach_state(struct pf_kstate *s)
 {
 	struct pf_state_key *sks = s->key[PF_SK_STACK];
 	struct pf_keyhash *kh;
+
+	MPASS(s->timeout >= PFTM_MAX);
 
 	pf_sctp_multihome_detach_addr(s);
 
@@ -1517,6 +1520,7 @@ pf_state_insert(struct pfi_kkif *kif, struct pfi_kkif *orig_kif,
 			break;
 
 	if (cur != NULL) {
+		s->timeout = PFTM_UNLINKED;
 		PF_HASHROW_UNLOCK(ih);
 		if (V_pf_status.debug >= PF_DEBUG_MISC) {
 			printf("pf: state ID collision: "
@@ -5367,8 +5371,7 @@ pf_tcp_track_full(struct pf_kstate **state, struct pfi_kkif *kif,
 	    (ackskew <= (MAXACKWINDOW << sws)) &&
 	    /* Acking not more than one window forward */
 	    ((th->th_flags & TH_RST) == 0 || orig_seq == src->seqlo ||
-	    (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo) ||
-	    (pd->flags & PFDESC_IP_REAS) == 0)) {
+	    (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo))) {
 	    /* Require an exact/+1 sequence match on resets when possible */
 
 		if (dst->scrub || src->scrub) {
@@ -6155,7 +6158,7 @@ again:
 				break;
 			}
 
-			/* Only add the addres if we've actually allowed the state. */
+			/* Only add the address if we've actually allowed the state. */
 			pf_sctp_multihome_add_addr(pd, &j->src, v_tag);
 
 			if (! do_extra) {
@@ -7375,6 +7378,7 @@ pf_route(struct mbuf **m, struct pf_krule *r, struct ifnet *oifp,
 		if (error == 0) {
 			m_clrprotoflags(m0);
 			md = m0;
+			pd->pf_mtag = pf_find_mtag(md);
 			error = pf_dummynet_route(pd, s, r, ifp,
 			    sintosa(&dst), &md);
 			if (md != NULL)

@@ -171,7 +171,6 @@ MAN=	aac.4 \
 	genetlink.4 \
 	geom.4 \
 	geom_linux_lvm.4 \
-	geom_map.4 \
 	geom_uzip.4 \
 	gif.4 \
 	${_gve.4} \
@@ -210,6 +209,7 @@ MAN=	aac.4 \
 	hwpmc.4 \
 	${_hwpstate_intel.4} \
 	iavf.4 \
+	ice.4 \
 	ichsmb.4 \
 	${_ichwd.4} \
 	icmp.4 \
@@ -343,6 +343,7 @@ MAN=	aac.4 \
 	netlink.4 \
 	netmap.4 \
 	${_nfe.4} \
+	nfslockd.4 \
 	${_nfsmb.4} \
 	ng_async.4 \
 	ng_bpf.4 \
@@ -492,6 +493,7 @@ MAN=	aac.4 \
 	send.4 \
 	ses.4 \
 	${_sfxge.4} \
+	sg.4 \
 	sge.4 \
 	siba.4 \
 	siftr.4 \
@@ -689,9 +691,11 @@ MLINKS+=ip.4 rawip.4
 MLINKS+=ipfirewall.4 ipaccounting.4 \
 	ipfirewall.4 ipacct.4 \
 	ipfirewall.4 ipfw.4
+MLINKS+=ice.4 if_ice.4
 MLINKS+=ipheth.4 if_ipheth.4
 MLINKS+=ipw.4 if_ipw.4
 MLINKS+=iwi.4 if_iwi.4
+MLINKS+=iwlwifi.4 if_iwlwifi.4
 MLINKS+=iwm.4 if_iwm.4
 MLINKS+=iwn.4 if_iwn.4
 MLINKS+=ixgbe.4 ix.4

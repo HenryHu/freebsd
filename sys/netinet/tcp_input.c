@@ -159,11 +159,6 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, drop_synfin, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(drop_synfin), 0,
     "Drop TCP packets with SYN+FIN set");
 
-VNET_DEFINE(int, tcp_do_prr_conservative) = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, do_prr_conservative, CTLFLAG_VNET | CTLFLAG_RW,
-    &VNET_NAME(tcp_do_prr_conservative), 0,
-    "Do conservative Proportional Rate Reduction");
-
 VNET_DEFINE(int, tcp_do_prr) = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, do_prr, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(tcp_do_prr), 1,
@@ -483,15 +478,15 @@ cc_post_recovery(struct tcpcb *tp, struct tcphdr *th)
 {
 	INP_WLOCK_ASSERT(tptoinpcb(tp));
 
-	/* XXXLAS: KASSERT that we're in recovery? */
-
 	if (CC_ALGO(tp)->post_recovery != NULL) {
 		tp->t_ccv.curack = th->th_ack;
 		CC_ALGO(tp)->post_recovery(&tp->t_ccv);
 	}
-	/* XXXLAS: EXIT_RECOVERY ? */
+	EXIT_RECOVERY(tp->t_flags);
+
 	tp->t_bytes_acked = 0;
 	tp->sackhint.delivered_data = 0;
+	tp->sackhint.prr_delivered = 0;
 	tp->sackhint.prr_out = 0;
 }
 
@@ -645,6 +640,7 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	to.to_flags = 0;
 	TCPSTAT_INC(tcps_rcvtotal);
 
+	m->m_pkthdr.tcp_tun_port = port;
 #ifdef INET6
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -1524,7 +1520,8 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
     int drop_hdrlen, int tlen, uint8_t iptos)
 {
 	uint16_t thflags;
-	int acked, ourfinisacked, needoutput = 0, sack_changed;
+	int acked, ourfinisacked, needoutput = 0;
+	sackstatus_t sack_changed;
 	int rstreason, todrop, win, incforsyn = 0;
 	uint32_t tiwin;
 	uint16_t nsegs;
@@ -1539,7 +1536,7 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 
 	thflags = tcp_get_flags(th);
 	tp->sackhint.last_sack_ack = 0;
-	sack_changed = 0;
+	sack_changed = SACK_NOCHANGE;
 	nsegs = max(1, m->m_pkthdr.lro_nsegs);
 
 	NET_EPOCH_ASSERT();
@@ -1873,7 +1870,13 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 					tcp_timer_activate(tp, TT_REXMT,
 					    TP_RXTCUR(tp));
 				sowwakeup(so);
-				if (sbavail(&so->so_snd))
+				/*
+				 * Only call tcp_output when there
+				 * is new data available to be sent
+				 * or we need to send an ACK.
+				 */
+				if (SEQ_GT(tp->snd_una + sbavail(&so->so_snd),
+				    tp->snd_max) || tp->t_flags & TF_ACKNOW)
 					(void) tcp_output(tp);
 				goto check_delack;
 			}
@@ -1938,7 +1941,7 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 				tp->t_flags |= TF_DELACK;
 			} else {
 				tp->t_flags |= TF_ACKNOW;
-				tcp_output(tp);
+				(void) tcp_output(tp);
 			}
 			goto check_delack;
 		}
@@ -2040,6 +2043,8 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 			tp->rcv_adv += min(tp->rcv_wnd,
 			    TCP_MAXWIN << tp->rcv_scale);
 			tp->snd_una++;		/* SYN is acked */
+			if (SEQ_LT(tp->snd_nxt, tp->snd_una))
+				tp->snd_nxt = tp->snd_una;
 			/*
 			 * If not all the data that was sent in the TFO SYN
 			 * has been acked, resend the remainder right away.
@@ -2509,7 +2514,8 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 			goto dropafterack;
 		}
 		if (tcp_is_sack_recovery(tp, &to)) {
-			if (((sack_changed = tcp_sack_doack(tp, &to, th->th_ack)) != 0) &&
+			sack_changed = tcp_sack_doack(tp, &to, th->th_ack);
+			if ((sack_changed != SACK_NOCHANGE) &&
 			    (tp->t_flags & TF_LRD)) {
 				tcp_sack_lost_retransmission(tp, th);
 			}
@@ -2582,7 +2588,7 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 				 */
 				if (th->th_ack != tp->snd_una ||
 				    (tcp_is_sack_recovery(tp, &to) &&
-				    !sack_changed))
+				    (sack_changed == SACK_NOCHANGE)))
 					break;
 				else if (!tcp_timer_active(tp, TT_REXMT))
 					tp->t_dupacks = 0;
@@ -2591,8 +2597,9 @@ tcp_do_segment(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 					cc_ack_received(tp, th, nsegs,
 					    CC_DUPACK);
 					if (V_tcp_do_prr &&
-					    IN_FASTRECOVERY(tp->t_flags)) {
-						tcp_do_prr_ack(tp, th, &to);
+					    IN_FASTRECOVERY(tp->t_flags) &&
+					    (tp->t_flags & TF_SACK_PERMIT)) {
+						tcp_do_prr_ack(tp, th, &to, sack_changed);
 					} else if (tcp_is_sack_recovery(tp, &to) &&
 					    IN_FASTRECOVERY(tp->t_flags)) {
 						int awnd;
@@ -2667,8 +2674,12 @@ enter_recovery:
 						 * cc_cong_signal.
 						 */
 						if (tcp_is_sack_recovery(tp, &to)) {
+							/*
+							 * Exclude Limited Transmit
+							 * segments here
+							 */
 							tp->sackhint.prr_delivered =
-							    tp->sackhint.sacked_bytes;
+							    maxseg;
 						} else {
 							tp->sackhint.prr_delivered =
 							    imin(tp->snd_max - tp->snd_una,
@@ -2771,7 +2782,7 @@ enter_recovery:
 			 * counted as dupacks here.
 			 */
 			if (tcp_is_sack_recovery(tp, &to) &&
-			    sack_changed) {
+			    (sack_changed != SACK_NOCHANGE)) {
 				tp->t_dupacks++;
 				/* limit overhead by setting maxseg last */
 				if (!IN_FASTRECOVERY(tp->t_flags) &&
@@ -2791,31 +2802,36 @@ resume_partialack:
 		 * If the congestion window was inflated to account
 		 * for the other side's cached packets, retract it.
 		 */
-		if (IN_FASTRECOVERY(tp->t_flags)) {
-			if (SEQ_LT(th->th_ack, tp->snd_recover)) {
-				if (tp->t_flags & TF_SACK_PERMIT)
-					if (V_tcp_do_prr && to.to_flags & TOF_SACK) {
-						tcp_timer_activate(tp, TT_REXMT, 0);
+		if (SEQ_LT(th->th_ack, tp->snd_recover)) {
+			if (IN_FASTRECOVERY(tp->t_flags)) {
+				if (tp->t_flags & TF_SACK_PERMIT) {
+					if (V_tcp_do_prr &&
+					    (to.to_flags & TOF_SACK)) {
+						tcp_timer_activate(tp,
+						    TT_REXMT, 0);
 						tp->t_rtttime = 0;
-						tcp_do_prr_ack(tp, th, &to);
+						tcp_do_prr_ack(tp, th, &to,
+						    sack_changed);
 						tp->t_flags |= TF_ACKNOW;
 						(void) tcp_output(tp);
-					} else
+					} else {
 						tcp_sack_partialack(tp, th);
-				else
+					}
+				} else {
 					tcp_newreno_partial_ack(tp, th);
-			} else
-				cc_post_recovery(tp, th);
-		} else if (IN_CONGRECOVERY(tp->t_flags)) {
-			if (SEQ_LT(th->th_ack, tp->snd_recover)) {
-				if (V_tcp_do_prr) {
-					tp->sackhint.delivered_data = BYTES_THIS_ACK(tp, th);
-					tp->snd_fack = th->th_ack;
-					tcp_do_prr_ack(tp, th, &to);
-					(void) tcp_output(tp);
 				}
-			} else
-				cc_post_recovery(tp, th);
+			} else if (IN_CONGRECOVERY(tp->t_flags) &&
+				    (V_tcp_do_prr)) {
+				tp->sackhint.delivered_data =
+				    BYTES_THIS_ACK(tp, th);
+				tp->snd_fack = th->th_ack;
+				/*
+				 * During ECN cwnd reduction
+				 * always use PRR-SSRB
+				 */
+				tcp_do_prr_ack(tp, th, &to, SACK_CHANGE);
+				(void) tcp_output(tp);
+			}
 		}
 		/*
 		 * If we reach this point, ACK is not a duplicate,
@@ -2966,12 +2982,11 @@ process_ACK:
 		    SEQ_GT(tp->snd_una, tp->snd_recover) &&
 		    SEQ_LEQ(th->th_ack, tp->snd_recover))
 			tp->snd_recover = th->th_ack - 1;
-		/* XXXLAS: Can this be moved up into cc_post_recovery? */
+		tp->snd_una = th->th_ack;
 		if (IN_RECOVERY(tp->t_flags) &&
 		    SEQ_GEQ(th->th_ack, tp->snd_recover)) {
-			EXIT_RECOVERY(tp->t_flags);
+			cc_post_recovery(tp, th);
 		}
-		tp->snd_una = th->th_ack;
 		if (tp->t_flags & TF_SACK_PERMIT) {
 			if (SEQ_GT(tp->snd_una, tp->snd_recover))
 				tp->snd_recover = tp->snd_una;
@@ -3236,6 +3251,35 @@ dodata:							/* XXX */
 			len = so->so_rcv.sb_hiwat;
 #endif
 	} else {
+		if ((s = tcp_log_addrs(inc, th, NULL, NULL))) {
+			if (tlen > 0) {
+				if ((thflags & TH_FIN) != 0) {
+					log(LOG_DEBUG, "%s; %s: %s: "
+					    "Received %d bytes of data and FIN "
+					    "after having received a FIN, "
+					    "just dropping both\n",
+					    s, __func__,
+					    tcpstates[tp->t_state], tlen);
+				} else {
+					log(LOG_DEBUG, "%s; %s: %s: "
+					    "Received %d bytes of data "
+					    "after having received a FIN, "
+					    "just dropping it\n",
+					    s, __func__,
+					    tcpstates[tp->t_state], tlen);
+				}
+			} else {
+				if ((thflags & TH_FIN) != 0) {
+					log(LOG_DEBUG, "%s; %s: %s: "
+					    "Received FIN "
+					    "after having received a FIN, "
+					    "just dropping it\n",
+					    s, __func__,
+					    tcpstates[tp->t_state]);
+				}
+			}
+			free(s, M_TCPLOG);
+		}
 		m_freem(m);
 		thflags &= ~TH_FIN;
 	}
@@ -3934,7 +3978,7 @@ tcp_mssopt(struct in_conninfo *inc)
 }
 
 void
-tcp_do_prr_ack(struct tcpcb *tp, struct tcphdr *th, struct tcpopt *to)
+tcp_do_prr_ack(struct tcpcb *tp, struct tcphdr *th, struct tcpopt *to, sackstatus_t sack_changed)
 {
 	int snd_cnt = 0, limit = 0, del_data = 0, pipe = 0;
 	int maxseg = tcp_maxseg(tp);
@@ -3972,9 +4016,19 @@ tcp_do_prr_ack(struct tcpcb *tp, struct tcphdr *th, struct tcpopt *to)
 			    imax(1, tp->snd_nxt - tp->snd_una);
 		snd_cnt = howmany((long)tp->sackhint.prr_delivered *
 			    tp->snd_ssthresh, tp->sackhint.recover_fs) -
-			    tp->sackhint.prr_out;
+			    tp->sackhint.prr_out + maxseg - 1;
 	} else {
-		if (V_tcp_do_prr_conservative || (del_data == 0))
+		/*
+		 * PRR 6937bis heuristic:
+		 * - A partial ack without SACK block beneath snd_recover
+		 * indicates further loss.
+		 * - An SACK scoreboard update adding a new hole indicates
+		 * further loss, so be conservative and send at most one
+		 * segment.
+		 * - Prevent ACK splitting attacks, by being conservative
+		 * when no new data is acked.
+		 */
+		if ((sack_changed == SACK_NEWLOSS) || (del_data == 0))
 			limit = tp->sackhint.prr_delivered -
 				tp->sackhint.prr_out;
 		else

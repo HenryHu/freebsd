@@ -5278,6 +5278,9 @@ bbr_stopall(struct tcpcb *tp)
 
 	bbr = (struct tcp_bbr *)tp->t_fb_ptr;
 	bbr->rc_all_timers_stopped = 1;
+
+	tcp_hpts_remove(tp);
+
 	return (0);
 }
 
@@ -6842,7 +6845,7 @@ bbr_update_rtt(struct tcpcb *tp, struct tcp_bbr *bbr,
 	 * Ok its a SACK block that we retransmitted. or a windows
 	 * machine without timestamps. We can tell nothing from the
 	 * time-stamp since its not there or the time the peer last
-	 * recieved a segment that moved forward its cum-ack point.
+	 * received a segment that moved forward its cum-ack point.
 	 *
 	 * Lets look at the last retransmit and see what we can tell
 	 * (with BBR for space we only keep 2 note we have to keep
@@ -9926,6 +9929,8 @@ bbr_init(struct tcpcb *tp, void **ptr)
 	struct tcp_bbr *bbr = NULL;
 	uint32_t cts;
 
+	tcp_hpts_init(tp);
+
 	*ptr = uma_zalloc(bbr_pcb_zone, (M_NOWAIT | M_ZERO));
 	if (*ptr == NULL) {
 		/*
@@ -11800,7 +11805,7 @@ bbr_output_wtime(struct tcpcb *tp, const struct timeval *tv)
 	uint32_t recwin, sendwin;
 	int32_t sb_offset;
 	int32_t flags, abandon, error = 0;
-	struct tcp_log_buffer *lgb = NULL;
+	struct tcp_log_buffer *lgb;
 	struct mbuf *m;
 	struct mbuf *mb;
 	uint32_t if_hw_tsomaxsegcount = 0;
@@ -13583,12 +13588,12 @@ send:
 			mtu = inp->inp_route.ro_nh->nh_mtu;
 	}
 #endif				/* INET */
-out:
-
 	if (lgb) {
 		lgb->tlb_errno = error;
 		lgb = NULL;
 	}
+
+out:
 	/*
 	 * In transmit state, time the transmission and arrange for the
 	 * retransmit.  In persist state, just set snd_max.
@@ -13804,6 +13809,7 @@ nomore:
 				return (error);
 			}
 		case EPERM:
+		case EACCES:
 			tp->t_softerror = error;
 			/* FALLTHROUGH */
 		case EHOSTDOWN:

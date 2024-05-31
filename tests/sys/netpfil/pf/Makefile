@@ -13,6 +13,7 @@ ATF_TESTS_SH+=	altq \
 		forward \
 		fragmentation_compat \
 		fragmentation_pass \
+		fragmentation_no_reassembly \
 		get_state \
 		icmp \
 		killstate \
@@ -39,6 +40,7 @@ ATF_TESTS_SH+=	altq \
 		syncookie \
 		synproxy \
 		table \
+		tcp \
 		tos
 
 ATF_TESTS_PYTEST+=	frag6.py

@@ -106,6 +106,7 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_kern_tls.h"
+#include "opt_ktrace.h"
 #include "opt_sctp.h"
 
 #include <sys/param.h>
@@ -524,8 +525,12 @@ socreate(int dom, struct socket **aso, int type, int proto,
 
 	MPASS(prp->pr_attach);
 
-	if (IN_CAPABILITY_MODE(td) && (prp->pr_flags & PR_CAPATTACH) == 0)
-		return (ECAPMODE);
+	if ((prp->pr_flags & PR_CAPATTACH) == 0) {
+		if (CAP_TRACING(td))
+			ktrcapfail(CAPFAIL_PROTO, &proto);
+		if (IN_CAPABILITY_MODE(td))
+			return (ECAPMODE);
+	}
 
 	if (prison_check_af(cred, prp->pr_domain->dom_family) != 0)
 		return (EPROTONOSUPPORT);
@@ -924,6 +929,10 @@ sopeeloff(struct socket *head)
 	so->so_snd.sb_timeo = head->so_snd.sb_timeo;
 	so->so_rcv.sb_flags |= head->so_rcv.sb_flags & SB_AUTOSIZE;
 	so->so_snd.sb_flags |= head->so_snd.sb_flags & SB_AUTOSIZE;
+	if ((so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
+		so->so_snd.sb_mtx = &so->so_snd_mtx;
+		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
+	}
 
 	soref(so);
 
