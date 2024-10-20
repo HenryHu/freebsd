@@ -289,6 +289,7 @@ MAN=	aac.4 \
 	mac_biba.4 \
 	mac_bsdextended.4 \
 	mac_ddb.4 \
+	mac_do.4 \
 	mac_ifoff.4 \
 	mac_ipacl.4 \
 	mac_lomac.4 \
@@ -407,9 +408,9 @@ MAN=	aac.4 \
 	${_if_ntb.4} \
 	null.4 \
 	numa.4 \
-	${_nvd.4} \
+	nvd.4 \
 	${_nvdimm.4} \
-	${_nvme.4} \
+	nvme.4 \
 	${_nvram.4} \
 	oce.4 \
 	ocs_fc.4\
@@ -473,6 +474,7 @@ MAN=	aac.4 \
 	rtsx.4 \
 	rtw88.4 \
 	rtw88fw.4 \
+	rtw89.4 \
 	rtwn.4 \
 	rtwnfw.4 \
 	rtwn_pci.4 \
@@ -512,6 +514,7 @@ MAN=	aac.4 \
 	snd_cmi.4 \
 	snd_cs4281.4 \
 	snd_csa.4 \
+	snd_dummy.4 \
 	snd_emu10k1.4 \
 	snd_emu10kx.4 \
 	snd_envy24.4 \
@@ -685,6 +688,8 @@ MLINKS+=gpioths.4 dht11.4
 MLINKS+=gpioths.4 dht22.4
 MLINKS+=gre.4 if_gre.4
 MLINKS+=hpet.4 acpi_hpet.4
+MLINKS+=${_hv_netvsc.4} ${_hn.4} \
+	${_hv_netvsc.4} ${_if_hn.4}
 MLINKS+=${_hptrr.4} ${_rr232x.4}
 MLINKS+=${_attimer.4} ${_i8254.4}
 MLINKS+=ip.4 rawip.4
@@ -808,6 +813,7 @@ _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
 _ftgpio.4=	ftgpio.4
 _ftwd.4=	ftwd.4
+_hn.4=		_hn.4
 _hpt27xx.4=	hpt27xx.4
 _hptiop.4=	hptiop.4
 _hptmv.4=	hptmv.4
@@ -823,6 +829,7 @@ _hwpstate_intel.4=	hwpstate_intel.4
 _i8254.4=	i8254.4
 _ichwd.4=	ichwd.4
 _if_bxe.4=	if_bxe.4
+_if_hn.4=	if_hn.4
 _if_nfe.4=	if_nfe.4
 _if_urtw.4=	if_urtw.4
 _if_vmx.4=	if_vmx.4
@@ -842,8 +849,6 @@ _ntb_hw_amd.4=	ntb_hw_amd.4
 _ntb_hw_intel.4=	ntb_hw_intel.4
 _ntb_hw_plx.4=	ntb_hw_plx.4
 _ntb_transport.4=ntb_transport.4
-_nvd.4=		nvd.4
-_nvme.4=	nvme.4
 _nvram.4=	nvram.4
 _padlock.4=	padlock.4
 _pchtherm.4=	pchtherm.4
@@ -889,11 +894,6 @@ MLINKS+=sume.4 if_sume.4
 _bhyve.4=	bhyve.4
 _vmm.4=		vmm.4
 .endif
-.endif
-
-.if ${MACHINE_CPUARCH} == "powerpc"
-_nvd.4= 	nvd.4
-_nvme.4=	nvme.4
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \

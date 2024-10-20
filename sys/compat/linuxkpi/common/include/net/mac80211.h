@@ -303,7 +303,7 @@ struct ieee80211_bss_conf {
 	int16_t					txpower;
 	uint32_t				basic_rates;
 	int					mcast_rate[NUM_NL80211_BANDS];
-	enum ieee80211_reg_ap_power 		power_type;
+	enum ieee80211_ap_reg_power 		power_type;
 	struct cfg80211_bitrate_mask		beacon_tx_rate;
 	struct mac80211_fils_discovery		fils_discovery;
 	struct ieee80211_chanctx_conf		*chanctx_conf;
@@ -1253,235 +1253,12 @@ ieee80211_hw_restart_disconnect(struct ieee80211_vif *vif)
 	    (_link = rcu_dereference((_vif)->link_conf[_linkid])) )
 
 #define	for_each_sta_active_link(_vif, _sta, _linksta, _linkid)		\
-    for (_linkid = 0; _linkid < nitems((_vif)->link_conf); _linkid++)	\
+    for (_linkid = 0; _linkid < nitems((_sta)->link); _linkid++)	\
 	if ( ((_vif)->active_links == 0 /* no MLO */ ||			\
 	    ((_vif)->active_links & BIT(_linkid)) != 0) &&		\
 	    (_linksta = link_sta_dereference_protected((_sta), (_linkid))) )
 
 /* -------------------------------------------------------------------------- */
-
-static __inline bool
-ieee80211_is_action(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_ACTION | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_probe_resp(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_PROBE_RESP | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_auth(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_AUTH | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_assoc_req(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_ASSOC_REQ | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_assoc_resp(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_ASSOC_RESP | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_reassoc_req(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_REASSOC_REQ | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_reassoc_resp(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_REASSOC_RESP | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_disassoc(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_DISASSOC | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_data_present(__le16 fc)
-{
-	__le16 v;
-
-	/* If it is a data frame and NODATA is not present. */
-	fc &= htole16(IEEE80211_FC0_TYPE_MASK | IEEE80211_FC0_SUBTYPE_NODATA);
-	v = htole16(IEEE80211_FC0_TYPE_DATA);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_deauth(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_DEAUTH | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_beacon(__le16 fc)
-{
-	__le16 v;
-
-	/*
-	 * For as much as I get it this comes in LE and unlike FreeBSD
-	 * where we get the entire frame header and u8[], here we get the
-	 * 9.2.4.1 Frame Control field only. Mask and compare.
-	 */
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_BEACON | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-
-static __inline bool
-ieee80211_is_probe_req(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_PROBE_REQ | IEEE80211_FC0_TYPE_MGT);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_has_protected(__le16 fc)
-{
-
-	return (fc & htole16(IEEE80211_FC1_PROTECTED << 8));
-}
-
-static __inline bool
-ieee80211_is_back_req(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_BAR | IEEE80211_FC0_TYPE_CTL);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_bufferable_mmpdu(struct sk_buff *skb)
-{
-	struct ieee80211_mgmt *mgmt;
-	__le16 fc;
-
-	mgmt = (struct ieee80211_mgmt *)skb->data;
-	fc = mgmt->frame_control;
-
-	/* 11.2.2 Bufferable MMPDUs, 80211-2020. */
-	/* XXX we do not care about IBSS yet. */
-
-	if (!ieee80211_is_mgmt(fc))
-		return (false);
-	if (ieee80211_is_action(fc))		/* XXX FTM? */
-		return (true);			/* XXX false? */
-	if (ieee80211_is_disassoc(fc))
-		return (true);
-	if (ieee80211_is_deauth(fc))
-		return (true);
-
-	TODO();
-
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_nullfunc(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_NODATA | IEEE80211_FC0_TYPE_DATA);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_qos_nullfunc(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_QOS_NULL | IEEE80211_FC0_TYPE_DATA);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_is_any_nullfunc(__le16 fc)
-{
-
-	return (ieee80211_is_nullfunc(fc) || ieee80211_is_qos_nullfunc(fc));
-}
-
-static inline bool
-ieee80211_is_pspoll(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16(IEEE80211_FC0_SUBTYPE_MASK | IEEE80211_FC0_TYPE_MASK);
-	v = htole16(IEEE80211_FC0_SUBTYPE_PS_POLL | IEEE80211_FC0_TYPE_CTL);
-
-	return (fc == v);
-}
 
 static __inline bool
 ieee80211_vif_is_mesh(struct ieee80211_vif *vif)
@@ -1490,124 +1267,6 @@ ieee80211_vif_is_mesh(struct ieee80211_vif *vif)
 	return (false);
 }
 
-static __inline bool
-ieee80211_is_frag(struct ieee80211_hdr *hdr)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_first_frag(__le16 fc)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_robust_mgmt_frame(struct sk_buff *skb)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_ftm(struct sk_buff *skb)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_is_timing_measurement(struct sk_buff *skb)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_has_pm(__le16 fc)
-{
-	TODO();
-	return (false);
-}
-
-static __inline bool
-ieee80211_has_a4(__le16 fc)
-{
-	__le16 v;
-
-	fc &= htole16((IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS) << 8);
-	v = htole16((IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS) << 8);
-
-	return (fc == v);
-}
-
-static __inline bool
-ieee80211_has_order(__le16 fc)
-{
-
-	return (fc & htole16(IEEE80211_FC1_ORDER << 8));
-}
-
-static __inline bool
-ieee80211_has_retry(__le16 fc)
-{
-
-	return (fc & htole16(IEEE80211_FC1_RETRY << 8));
-}
-
-
-static __inline bool
-ieee80211_has_fromds(__le16 fc)
-{
-
-	return (fc & htole16(IEEE80211_FC1_DIR_FROMDS << 8));
-}
-
-static __inline bool
-ieee80211_has_tods(__le16 fc)
-{
-
-	return (fc & htole16(IEEE80211_FC1_DIR_TODS << 8));
-}
-
-static __inline uint8_t *
-ieee80211_get_SA(struct ieee80211_hdr *hdr)
-{
-
-	if (ieee80211_has_a4(hdr->frame_control))
-		return (hdr->addr4);
-	if (ieee80211_has_fromds(hdr->frame_control))
-		return (hdr->addr3);
-	return (hdr->addr2);
-}
-
-static __inline uint8_t *
-ieee80211_get_DA(struct ieee80211_hdr *hdr)
-{
-
-	if (ieee80211_has_tods(hdr->frame_control))
-		return (hdr->addr3);
-	return (hdr->addr1);
-}
-
-static __inline bool
-ieee80211_has_morefrags(__le16 fc)
-{
-
-	fc &= htole16(IEEE80211_FC1_MORE_FRAG << 8);
-	return (fc != 0);
-}
-
-static __inline u8 *
-ieee80211_get_qos_ctl(struct ieee80211_hdr *hdr)
-{
-        if (ieee80211_has_a4(hdr->frame_control))
-                return (u8 *)hdr + 30;
-        else
-                return (u8 *)hdr + 24;
-}
 
 /* -------------------------------------------------------------------------- */
 /* Receive functions (air/driver to mac80211/net80211). */
@@ -2077,6 +1736,32 @@ ieee80211_cqm_rssi_notify(struct ieee80211_vif *vif,
 	TODO();
 }
 
+/* -------------------------------------------------------------------------- */
+
+static inline bool
+ieee80211_sn_less(uint16_t sn1, uint16_t sn2)
+{
+	return (IEEE80211_SEQ_BA_BEFORE(sn1, sn2));
+}
+
+static inline uint16_t
+ieee80211_sn_inc(uint16_t sn)
+{
+	return (IEEE80211_SEQ_INC(sn));
+}
+
+static inline uint16_t
+ieee80211_sn_add(uint16_t sn, uint16_t a)
+{
+	return (IEEE80211_SEQ_ADD(sn, a));
+}
+
+static inline uint16_t
+ieee80211_sn_sub(uint16_t sa, uint16_t sb)
+{
+	return (IEEE80211_SEQ_SUB(sa, sb));
+}
+
 static __inline void
 ieee80211_mark_rx_ba_filtered_frames(struct ieee80211_sta *sta, uint8_t tid,
     uint32_t ssn, uint64_t bitmap, uint16_t received_mpdu)
@@ -2084,32 +1769,34 @@ ieee80211_mark_rx_ba_filtered_frames(struct ieee80211_sta *sta, uint8_t tid,
 	TODO();
 }
 
-static __inline bool
-ieee80211_sn_less(uint16_t sn1, uint16_t sn2)
-{
-	TODO();
-	return (false);
-}
-
-static __inline uint16_t
-ieee80211_sn_inc(uint16_t sn)
-{
-	TODO();
-	return (sn + 1);
-}
-
-static __inline uint16_t
-ieee80211_sn_add(uint16_t sn, uint16_t a)
-{
-	TODO();
-	return (sn + a);
-}
-
 static __inline void
 ieee80211_stop_rx_ba_session(struct ieee80211_vif *vif, uint32_t x, uint8_t *addr)
 {
 	TODO();
 }
+
+static __inline void
+ieee80211_rx_ba_timer_expired(struct ieee80211_vif *vif, uint8_t *addr,
+    uint8_t tid)
+{
+	TODO();
+}
+
+static __inline void
+ieee80211_start_rx_ba_session_offl(struct ieee80211_vif *vif, uint8_t *addr,
+    uint8_t tid)
+{
+	TODO();
+}
+
+static __inline void
+ieee80211_stop_rx_ba_session_offl(struct ieee80211_vif *vif, uint8_t *addr,
+    uint8_t tid)
+{
+	TODO();
+}
+
+/* -------------------------------------------------------------------------- */
 
 static __inline void
 ieee80211_rate_set_vht(struct ieee80211_tx_rate *r, uint32_t f1, uint32_t f2)
@@ -2144,24 +1831,9 @@ ieee80211_unreserve_tid(struct ieee80211_sta *sta, uint8_t tid)
 }
 
 static __inline void
-ieee80211_rx_ba_timer_expired(struct ieee80211_vif *vif, uint8_t *addr,
-    uint8_t tid)
-{
-	TODO();
-}
-
-static __inline void
 ieee80211_send_eosp_nullfunc(struct ieee80211_sta *sta, uint8_t tid)
 {
 	TODO();
-}
-
-static __inline uint16_t
-ieee80211_sn_sub(uint16_t sa, uint16_t sb)
-{
-
-	return ((sa - sb) &
-	    (IEEE80211_SEQ_SEQ_MASK >> IEEE80211_SEQ_SEQ_SHIFT));
 }
 
 static __inline void
@@ -2455,20 +2127,6 @@ SET_IEEE80211_PERM_ADDR	(struct ieee80211_hw *hw, uint8_t *addr)
 
 static __inline void
 ieee80211_report_low_ack(struct ieee80211_sta *sta, int x)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_start_rx_ba_session_offl(struct ieee80211_vif *vif, uint8_t *addr,
-    uint8_t tid)
-{
-	TODO();
-}
-
-static __inline void
-ieee80211_stop_rx_ba_session_offl(struct ieee80211_vif *vif, uint8_t *addr,
-    uint8_t tid)
 {
 	TODO();
 }
