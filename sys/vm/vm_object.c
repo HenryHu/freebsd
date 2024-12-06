@@ -2583,10 +2583,12 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 				 * sysctl is only meant to give an
 				 * approximation of the system anyway.
 				 */
-				if (m->a.queue == PQ_ACTIVE)
+				if (vm_page_active(m))
 					kvo->kvo_active++;
-				else if (m->a.queue == PQ_INACTIVE)
+				else if (vm_page_inactive(m))
 					kvo->kvo_inactive++;
+				else if (vm_page_in_laundry(m))
+					kvo->kvo_laundry++;
 			}
 		}
 
@@ -2608,8 +2610,9 @@ vm_object_list_handler(struct sysctl_req *req, bool swap_only)
 			sp = swap_pager_swapped_pages(obj);
 			kvo->kvo_swapped = sp > UINT32_MAX ? UINT32_MAX : sp;
 		}
-		if (obj->type == OBJT_DEVICE || obj->type == OBJT_MGTDEVICE) {
-			cdev = obj->un_pager.devp.dev;
+		if ((obj->type == OBJT_DEVICE || obj->type == OBJT_MGTDEVICE) &&
+		    (obj->flags & OBJ_CDEVH) != 0) {
+			cdev = obj->un_pager.devp.handle;
 			if (cdev != NULL) {
 				csw = dev_refthread(cdev, &ref);
 				if (csw != NULL) {

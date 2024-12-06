@@ -288,12 +288,6 @@ iommu_free_ctx_locked(struct iommu_unit *iommu, struct iommu_ctx *context)
 	x86_iommu->free_ctx_locked(iommu, context);
 }
 
-void
-iommu_free_ctx(struct iommu_ctx *context)
-{
-	x86_iommu->free_ctx(context);
-}
-
 struct iommu_unit *
 iommu_find(device_t dev, bool verbose)
 {
@@ -756,6 +750,19 @@ pglvl_page_size(int total_pglvl, int lvl)
 	rlvl = total_pglvl - lvl - 1;
 	KASSERT(rlvl < nitems(pg_sz), ("sizeof pg_sz lvl %d", lvl));
 	return (pg_sz[rlvl]);
+}
+
+void
+iommu_device_set_iommu_prop(device_t dev, device_t iommu)
+{
+	device_t iommu_dev;
+	int error;
+
+	bus_topo_lock();
+	error = device_get_prop(dev, DEV_PROP_NAME_IOMMU, (void **)&iommu_dev);
+	if (error == ENOENT)
+		device_set_prop(dev, DEV_PROP_NAME_IOMMU, iommu, NULL, NULL);
+	bus_topo_unlock();
 }
 
 #ifdef DDB

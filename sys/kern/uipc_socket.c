@@ -155,6 +155,7 @@
 #include <net/vnet.h>
 
 #include <security/mac/mac_framework.h>
+#include <security/mac/mac_internal.h>
 
 #include <vm/uma.h>
 
@@ -190,17 +191,17 @@ static int	filt_soempty(struct knote *kn, long hint);
 static int inline hhook_run_socket(struct socket *so, void *hctx, int32_t h_id);
 fo_kqfilter_t	soo_kqfilter;
 
-static struct filterops soread_filtops = {
+static const struct filterops soread_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_sordetach,
 	.f_event = filt_soread,
 };
-static struct filterops sowrite_filtops = {
+static const struct filterops sowrite_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_sowdetach,
 	.f_event = filt_sowrite,
 };
-static struct filterops soempty_filtops = {
+static const struct filterops soempty_filtops = {
 	.f_isfd = 1,
 	.f_detach = filt_sowdetach,
 	.f_event = filt_soempty,
@@ -1465,6 +1466,10 @@ solisten_proto(struct socket *so, int backlog)
 	sbsnd_flags = so->so_snd.sb_flags;
 	sbrcv_timeo = so->so_rcv.sb_timeo;
 	sbsnd_timeo = so->so_snd.sb_timeo;
+
+#ifdef MAC
+	mac_socketpeer_label_free(so->so_peerlabel);
+#endif
 
 	sbdestroy(so, SO_SND);
 	sbdestroy(so, SO_RCV);
@@ -4107,23 +4112,31 @@ integer:
 			goto integer;
 
 		case SO_SNDBUF:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_sbsnd_hiwat :
 			    so->so_snd.sb_hiwat;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_RCVBUF:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_sbrcv_hiwat :
 			    so->so_rcv.sb_hiwat;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_SNDLOWAT:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_sbsnd_lowat :
 			    so->so_snd.sb_lowat;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_RCVLOWAT:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_sbrcv_lowat :
 			    so->so_rcv.sb_lowat;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_SNDTIMEO:
@@ -4180,15 +4193,21 @@ integer:
 			break;
 
 		case SO_LISTENQLIMIT:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_qlimit : 0;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_LISTENQLEN:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_qlen : 0;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_LISTENINCQLEN:
+			SOCK_LOCK(so);
 			optval = SOLISTENING(so) ? so->sol_incqlen : 0;
+			SOCK_UNLOCK(so);
 			goto integer;
 
 		case SO_TS_CLOCK:
@@ -5001,6 +5020,7 @@ sotoxsocket(struct socket *so, struct xsocket *xso)
 	xso->so_uid = so->so_cred->cr_uid;
 	xso->so_pgid = so->so_sigio ? so->so_sigio->sio_pgid : 0;
 	SOCK_LOCK(so);
+	xso->so_fibnum = so->so_fibnum;
 	if (SOLISTENING(so)) {
 		xso->so_qlen = so->sol_qlen;
 		xso->so_incqlen = so->sol_incqlen;
