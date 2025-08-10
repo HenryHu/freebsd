@@ -569,7 +569,7 @@ spa_condense_indirect_commit_entry(spa_t *spa,
 
 	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
 	dmu_tx_hold_space(tx, sizeof (*vimep) + sizeof (count));
-	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT));
+	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT | DMU_TX_SUSPEND));
 	int txgoff = dmu_tx_get_txg(tx) & TXG_MASK;
 
 	/*
@@ -1842,7 +1842,7 @@ vdev_indirect_io_done(zio_t *zio)
 	 */
 	if (zio->io_flags & ZIO_FLAG_DIO_READ && ret == ECKSUM) {
 		zio->io_error = ret;
-		zio->io_flags |= ZIO_FLAG_DIO_CHKSUM_ERR;
+		zio->io_post |= ZIO_POST_DIO_CHKSUM_ERR;
 		zio_dio_chksum_verify_error_report(zio);
 		ret = 0;
 	}

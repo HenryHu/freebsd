@@ -1084,7 +1084,7 @@ send_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	 */
 	if (sta->os->os_encrypted &&
 	    !BP_IS_HOLE(bp) && !BP_USES_CRYPT(bp)) {
-		spa_log_error(spa, zb, BP_GET_LOGICAL_BIRTH(bp));
+		spa_log_error(spa, zb, BP_GET_PHYSICAL_BIRTH(bp));
 		return (SET_ERROR(EIO));
 	}
 
@@ -1210,7 +1210,7 @@ send_traverse_thread(void *arg)
 
 	err = traverse_dataset_resume(st_arg->os->os_dsl_dataset,
 	    st_arg->fromtxg, &st_arg->resume,
-	    st_arg->flags, send_cb, st_arg);
+	    st_arg->flags | TRAVERSE_LOGICAL, send_cb, st_arg);
 
 	if (err != EINTR)
 		st_arg->error_code = err;
@@ -2687,8 +2687,8 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 	}
 
 	if (fromsnap != 0) {
-		err = dsl_dataset_hold_obj_flags(dspp.dp, fromsnap, dsflags,
-		    FTAG, &fromds);
+		err = dsl_dataset_hold_obj(dspp.dp, fromsnap, FTAG, &fromds);
+
 		if (err != 0) {
 			dsl_dataset_rele_flags(dspp.to_ds, dsflags, FTAG);
 			dsl_pool_rele(dspp.dp, FTAG);
@@ -2740,7 +2740,7 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 		kmem_free(dspp.fromredactsnaps,
 		    dspp.numfromredactsnaps * sizeof (uint64_t));
 
-	dsl_dataset_rele(dspp.to_ds, FTAG);
+	dsl_dataset_rele_flags(dspp.to_ds, dsflags, FTAG);
 	return (err);
 }
 

@@ -1403,7 +1403,7 @@ corrective_read_done(zio_t *zio)
 	/* Corruption corrected; update error log if needed */
 	if (zio->io_error == 0) {
 		spa_remove_error(data->spa, &data->zb,
-		    BP_GET_LOGICAL_BIRTH(zio->io_bp));
+		    BP_GET_PHYSICAL_BIRTH(zio->io_bp));
 	}
 	kmem_free(data, sizeof (cr_cb_data_t));
 	abd_free(zio->io_abd);
@@ -1530,7 +1530,7 @@ do_corrective_recv(struct receive_writer_arg *rwa, struct drr_write *drrw,
 	}
 	rrd->abd = abd;
 
-	io = zio_rewrite(NULL, rwa->os->os_spa, BP_GET_LOGICAL_BIRTH(bp), bp,
+	io = zio_rewrite(NULL, rwa->os->os_spa, BP_GET_BIRTH(bp), bp,
 	    abd, BP_GET_PSIZE(bp), NULL, NULL, ZIO_PRIORITY_SYNC_WRITE, flags,
 	    &zb);
 
@@ -2135,7 +2135,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 	if (data != NULL) {
 		dmu_buf_t *db;
 		dnode_t *dn;
-		uint32_t flags = DMU_READ_NO_PREFETCH;
+		dmu_flags_t flags = DMU_READ_NO_PREFETCH;
 
 		if (rwa->raw)
 			flags |= DMU_READ_NO_DECRYPT;
@@ -2277,14 +2277,18 @@ flush_write_batch_impl(struct receive_writer_arg *rwa)
 					dmu_write_by_dnode(dn,
 					    drrw->drr_offset,
 					    drrw->drr_logical_size,
-					    abd_to_buf(decomp_abd), tx);
+					    abd_to_buf(decomp_abd), tx,
+					    DMU_READ_NO_PREFETCH |
+					    DMU_UNCACHEDIO);
 				}
 				abd_free(decomp_abd);
 			} else {
 				dmu_write_by_dnode(dn,
 				    drrw->drr_offset,
 				    drrw->drr_logical_size,
-				    abd_to_buf(abd), tx);
+				    abd_to_buf(abd), tx,
+				    DMU_READ_NO_PREFETCH |
+				    DMU_UNCACHEDIO);
 			}
 			if (err == 0)
 				abd_free(abd);
@@ -2407,10 +2411,10 @@ receive_process_write_record(struct receive_writer_arg *rwa,
 	if (rwa->heal) {
 		blkptr_t *bp;
 		dmu_buf_t *dbp;
-		int flags = DB_RF_CANFAIL;
+		dmu_flags_t flags = DB_RF_CANFAIL;
 
 		if (rwa->raw)
-			flags |= DB_RF_NO_DECRYPT;
+			flags |= DMU_READ_NO_DECRYPT;
 
 		if (rwa->byteswap) {
 			dmu_object_byteswap_t byteswap =
@@ -2567,8 +2571,8 @@ receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
 		rwa->max_object = drrs->drr_object;
 
 	VERIFY0(dmu_bonus_hold(rwa->os, drrs->drr_object, FTAG, &db));
-	if ((err = dmu_spill_hold_by_bonus(db, DMU_READ_NO_DECRYPT, FTAG,
-	    &db_spill)) != 0) {
+	if ((err = dmu_spill_hold_by_bonus(db, DMU_READ_NO_DECRYPT |
+	    DB_RF_CANFAIL, FTAG, &db_spill)) != 0) {
 		dmu_buf_rele(db, FTAG);
 		return (err);
 	}
@@ -2621,7 +2625,8 @@ receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
 
 	memcpy(abuf->b_data, abd_to_buf(abd), DRR_SPILL_PAYLOAD_SIZE(drrs));
 	abd_free(abd);
-	dbuf_assign_arcbuf((dmu_buf_impl_t *)db_spill, abuf, tx);
+	dbuf_assign_arcbuf((dmu_buf_impl_t *)db_spill, abuf, tx,
+	    DMU_UNCACHEDIO);
 
 	dmu_buf_rele(db, FTAG);
 	dmu_buf_rele(db_spill, FTAG);
@@ -3826,11 +3831,11 @@ dmu_recv_end(dmu_recv_cookie_t *drc, void *owner)
 		nvlist_free(drc->drc_keynvl);
 	} else if (!drc->drc_heal) {
 		if (drc->drc_newfs) {
-			zvol_create_minor(drc->drc_tofs);
+			zvol_create_minors(drc->drc_tofs);
 		}
 		char *snapname = kmem_asprintf("%s@%s",
 		    drc->drc_tofs, drc->drc_tosnap);
-		zvol_create_minor(snapname);
+		zvol_create_minors(snapname);
 		kmem_strfree(snapname);
 	}
 

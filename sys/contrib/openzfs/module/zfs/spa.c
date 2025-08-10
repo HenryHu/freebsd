@@ -100,6 +100,7 @@
 #include <sys/vmsystm.h>
 #endif	/* _KERNEL */
 
+#include "zfs_crrd.h"
 #include "zfs_prop.h"
 #include "zfs_comutil.h"
 #include <cityhash.h>
@@ -311,6 +312,41 @@ static int zfs_livelist_condense_zthr_cancel = 0;
 static int zfs_livelist_condense_new_alloc = 0;
 
 /*
+ * Time variable to decide how often the txg should be added into the
+ * database (in seconds).
+ * The smallest available resolution is in minutes, which means an update occurs
+ * each time we reach `spa_note_txg_time` and the txg has changed. We provide
+ * a 256-slot ring buffer for minute-level resolution. The number is limited by
+ * the size of the structure we use and the maximum amount of bytes we can write
+ * into ZAP. Setting `spa_note_txg_time` to 10 minutes results in approximately
+ * 144 records per day. Given the 256 slots, this provides roughly 1.5 days of
+ * high-resolution data.
+ *
+ * The user can decrease `spa_note_txg_time` to increase resolution within
+ * a day, at the cost of retaining fewer days of data. Alternatively, increasing
+ * the interval allows storing data over a longer period, but with lower
+ * frequency.
+ *
+ * This parameter does not affect the daily or monthly databases, as those only
+ * store one record per day and per month, respectively.
+ */
+static uint_t spa_note_txg_time = 10 * 60;
+
+/*
+ * How often flush txg database to a disk (in seconds).
+ * We flush data every time we write to it, making it the most reliable option.
+ * Since this happens every 10 minutes, it shouldn't introduce any noticeable
+ * overhead for the system. In case of failure, we will always have an
+ * up-to-date version of the database.
+ *
+ * The user can adjust the flush interval to a lower value, but it probably
+ * doesn't make sense to flush more often than the database is updated.
+ * The user can also increase the interval if they're concerned about the
+ * performance of writing the entire database to disk.
+ */
+static uint_t spa_flush_txg_time = 10 * 60;
+
+/*
  * ==========================================================================
  * SPA properties routines
  * ==========================================================================
@@ -417,11 +453,15 @@ spa_prop_get_config(spa_t *spa, nvlist_t *nv)
 		alloc += metaslab_class_get_alloc(spa_special_class(spa));
 		alloc += metaslab_class_get_alloc(spa_dedup_class(spa));
 		alloc += metaslab_class_get_alloc(spa_embedded_log_class(spa));
+		alloc += metaslab_class_get_alloc(
+		    spa_special_embedded_log_class(spa));
 
 		size = metaslab_class_get_space(mc);
 		size += metaslab_class_get_space(spa_special_class(spa));
 		size += metaslab_class_get_space(spa_dedup_class(spa));
 		size += metaslab_class_get_space(spa_embedded_log_class(spa));
+		size += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 
 		spa_prop_add_list(nv, ZPOOL_PROP_NAME, spa_name(spa), 0, src);
 		spa_prop_add_list(nv, ZPOOL_PROP_SIZE, NULL, size, src);
@@ -1231,29 +1271,14 @@ spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 			    spa->spa_proc, zio_taskq_basedc, flags);
 		} else {
 #endif
-			pri_t pri = maxclsyspri;
 			/*
 			 * The write issue taskq can be extremely CPU
 			 * intensive.  Run it at slightly less important
 			 * priority than the other taskqs.
-			 *
-			 * Under Linux and FreeBSD this means incrementing
-			 * the priority value as opposed to platforms like
-			 * illumos where it should be decremented.
-			 *
-			 * On FreeBSD, if priorities divided by four (RQ_PPQ)
-			 * are equal then a difference between them is
-			 * insignificant.
 			 */
-			if (t == ZIO_TYPE_WRITE && q == ZIO_TASKQ_ISSUE) {
-#if defined(__linux__)
-				pri++;
-#elif defined(__FreeBSD__)
-				pri += 4;
-#else
-#error "unknown OS"
-#endif
-			}
+			const pri_t pri = (t == ZIO_TYPE_WRITE &&
+			    q == ZIO_TASKQ_ISSUE) ?
+			    wtqclsyspri : maxclsyspri;
 			tq = taskq_create_proc(name, value, pri, 50,
 			    INT_MAX, spa->spa_proc, flags);
 #ifdef HAVE_SYSDC
@@ -1683,14 +1708,21 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 	ASSERT(spa->spa_state == POOL_STATE_UNINITIALIZED);
 
 	spa->spa_state = POOL_STATE_ACTIVE;
+	spa->spa_final_txg = UINT64_MAX;
 	spa->spa_mode = mode;
 	spa->spa_read_spacemaps = spa_mode_readable_spacemaps;
 
-	spa->spa_normal_class = metaslab_class_create(spa, msp, B_FALSE);
-	spa->spa_log_class = metaslab_class_create(spa, msp, B_TRUE);
-	spa->spa_embedded_log_class = metaslab_class_create(spa, msp, B_TRUE);
-	spa->spa_special_class = metaslab_class_create(spa, msp, B_FALSE);
-	spa->spa_dedup_class = metaslab_class_create(spa, msp, B_FALSE);
+	spa->spa_normal_class = metaslab_class_create(spa, "normal",
+	    msp, B_FALSE);
+	spa->spa_log_class = metaslab_class_create(spa, "log", msp, B_TRUE);
+	spa->spa_embedded_log_class = metaslab_class_create(spa,
+	    "embedded_log", msp, B_TRUE);
+	spa->spa_special_class = metaslab_class_create(spa, "special",
+	    msp, B_FALSE);
+	spa->spa_special_embedded_log_class = metaslab_class_create(spa,
+	    "special_embedded_log", msp, B_TRUE);
+	spa->spa_dedup_class = metaslab_class_create(spa, "dedup",
+	    msp, B_FALSE);
 
 	/* Try to create a covering process */
 	mutex_enter(&spa->spa_proc_lock);
@@ -1863,6 +1895,9 @@ spa_deactivate(spa_t *spa)
 	metaslab_class_destroy(spa->spa_special_class);
 	spa->spa_special_class = NULL;
 
+	metaslab_class_destroy(spa->spa_special_embedded_log_class);
+	spa->spa_special_embedded_log_class = NULL;
+
 	metaslab_class_destroy(spa->spa_dedup_class);
 	spa->spa_dedup_class = NULL;
 
@@ -1984,7 +2019,7 @@ static void
 spa_unload_log_sm_flush_all(spa_t *spa)
 {
 	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
-	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT));
+	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT | DMU_TX_SUSPEND));
 
 	ASSERT3U(spa->spa_log_flushall_txg, ==, 0);
 	spa->spa_log_flushall_txg = dmu_tx_get_txg(tx);
@@ -2041,6 +2076,111 @@ spa_destroy_aux_threads(spa_t *spa)
 	}
 }
 
+static void
+spa_sync_time_logger(spa_t *spa, uint64_t txg)
+{
+	uint64_t curtime;
+	dmu_tx_t *tx;
+
+	if (!spa_writeable(spa)) {
+		return;
+	}
+	curtime = gethrestime_sec();
+	if (curtime < spa->spa_last_noted_txg_time + spa_note_txg_time) {
+		return;
+	}
+
+	if (txg > spa->spa_last_noted_txg) {
+		spa->spa_last_noted_txg_time = curtime;
+		spa->spa_last_noted_txg = txg;
+
+		mutex_enter(&spa->spa_txg_log_time_lock);
+		dbrrd_add(&spa->spa_txg_log_time, curtime, txg);
+		mutex_exit(&spa->spa_txg_log_time_lock);
+	}
+
+	if (curtime < spa->spa_last_flush_txg_time + spa_flush_txg_time) {
+		return;
+	}
+	spa->spa_last_flush_txg_time = curtime;
+
+	tx = dmu_tx_create_assigned(spa_get_dsl(spa), txg);
+
+	VERIFY0(zap_update(spa_meta_objset(spa), DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_MINUTES, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_minutes, tx));
+	VERIFY0(zap_update(spa_meta_objset(spa), DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_DAYS, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_days, tx));
+	VERIFY0(zap_update(spa_meta_objset(spa), DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_MONTHS, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_months, tx));
+	dmu_tx_commit(tx);
+}
+
+static void
+spa_unload_sync_time_logger(spa_t *spa)
+{
+	uint64_t txg;
+	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
+	VERIFY0(dmu_tx_assign(tx, DMU_TX_WAIT));
+
+	txg = dmu_tx_get_txg(tx);
+	spa->spa_last_noted_txg_time = 0;
+	spa->spa_last_flush_txg_time = 0;
+	spa_sync_time_logger(spa, txg);
+
+	dmu_tx_commit(tx);
+}
+
+static void
+spa_load_txg_log_time(spa_t *spa)
+{
+	int error;
+
+	error = zap_lookup(spa->spa_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_MINUTES, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_minutes);
+	if (error != 0 && error != ENOENT) {
+		spa_load_note(spa, "unable to load a txg time database with "
+		    "minute resolution [error=%d]", error);
+	}
+	error = zap_lookup(spa->spa_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_DAYS, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_days);
+	if (error != 0 && error != ENOENT) {
+		spa_load_note(spa, "unable to load a txg time database with "
+		    "day resolution [error=%d]", error);
+	}
+	error = zap_lookup(spa->spa_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_TXG_LOG_TIME_MONTHS, RRD_ENTRY_SIZE, RRD_STRUCT_ELEM,
+	    &spa->spa_txg_log_time.dbr_months);
+	if (error != 0 && error != ENOENT) {
+		spa_load_note(spa, "unable to load a txg time database with "
+		    "month resolution [error=%d]", error);
+	}
+}
+
+static boolean_t
+spa_should_sync_time_logger_on_unload(spa_t *spa)
+{
+
+	if (!spa_writeable(spa))
+		return (B_FALSE);
+
+	if (!spa->spa_sync_on)
+		return (B_FALSE);
+
+	if (spa_state(spa) != POOL_STATE_EXPORTED)
+		return (B_FALSE);
+
+	if (spa->spa_last_noted_txg == 0)
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
+
 /*
  * Opposite of spa_load().
  */
@@ -2062,6 +2202,9 @@ spa_unload(spa_t *spa)
 	 * we delay the final TXGs beyond what spa_final_txg is set at.
 	 */
 	if (spa->spa_final_txg == UINT64_MAX) {
+		if (spa_should_sync_time_logger_on_unload(spa))
+			spa_unload_sync_time_logger(spa);
+
 		/*
 		 * If the log space map feature is enabled and the pool is
 		 * getting exported (but not destroyed), we want to spend some
@@ -2085,6 +2228,11 @@ spa_unload(spa_t *spa)
 			vdev_rebuild_stop_all(spa);
 			l2arc_spa_rebuild_stop(spa);
 		}
+
+		spa_config_enter(spa, SCL_ALL, FTAG, RW_WRITER);
+		spa->spa_final_txg = spa_last_synced_txg(spa) +
+		    TXG_DEFER_SIZE + 1;
+		spa_config_exit(spa, SCL_ALL, FTAG);
 	}
 
 	/*
@@ -2194,6 +2342,7 @@ spa_unload(spa_t *spa)
 	}
 
 	spa->spa_raidz_expand = NULL;
+	spa->spa_checkpoint_txg = 0;
 
 	spa_config_exit(spa, SCL_ALL, spa);
 }
@@ -2713,8 +2862,8 @@ spa_claim_notify(zio_t *zio)
 		return;
 
 	mutex_enter(&spa->spa_props_lock);	/* any mutex will do */
-	if (spa->spa_claim_max_txg < BP_GET_LOGICAL_BIRTH(zio->io_bp))
-		spa->spa_claim_max_txg = BP_GET_LOGICAL_BIRTH(zio->io_bp);
+	if (spa->spa_claim_max_txg < BP_GET_BIRTH(zio->io_bp))
+		spa->spa_claim_max_txg = BP_GET_BIRTH(zio->io_bp);
 	mutex_exit(&spa->spa_props_lock);
 }
 
@@ -3772,20 +3921,17 @@ out:
 	 * ZPOOL_CONFIG_MMP_HOSTID   - hostid from the active pool
 	 */
 	if (error == EREMOTEIO) {
-		const char *hostname = "<unknown>";
-		uint64_t hostid = 0;
-
 		if (mmp_label) {
 			if (nvlist_exists(mmp_label, ZPOOL_CONFIG_HOSTNAME)) {
-				hostname = fnvlist_lookup_string(mmp_label,
-				    ZPOOL_CONFIG_HOSTNAME);
+				const char *hostname = fnvlist_lookup_string(
+				    mmp_label, ZPOOL_CONFIG_HOSTNAME);
 				fnvlist_add_string(spa->spa_load_info,
 				    ZPOOL_CONFIG_MMP_HOSTNAME, hostname);
 			}
 
 			if (nvlist_exists(mmp_label, ZPOOL_CONFIG_HOSTID)) {
-				hostid = fnvlist_lookup_uint64(mmp_label,
-				    ZPOOL_CONFIG_HOSTID);
+				uint64_t hostid = fnvlist_lookup_uint64(
+				    mmp_label, ZPOOL_CONFIG_HOSTID);
 				fnvlist_add_uint64(spa->spa_load_info,
 				    ZPOOL_CONFIG_MMP_HOSTID, hostid);
 			}
@@ -4714,6 +4860,9 @@ spa_ld_get_props(spa_t *spa)
 	    &spa->spa_creation_version, B_FALSE);
 	if (error != 0 && error != ENOENT)
 		return (spa_vdev_err(rvd, VDEV_AUX_CORRUPT_DATA, EIO));
+
+	/* Load time log */
+	spa_load_txg_log_time(spa);
 
 	/*
 	 * Load the persistent error log.  If we have an older pool, this will
@@ -5903,7 +6052,7 @@ spa_open_common(const char *pool, spa_t **spapp, const void *tag,
 	}
 
 	if (firstopen)
-		zvol_create_minors_recursive(spa_name(spa));
+		zvol_create_minors(spa_name(spa));
 
 	*spapp = spa;
 
@@ -6881,7 +7030,7 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 
 	mutex_exit(&spa_namespace_lock);
 
-	zvol_create_minors_recursive(pool);
+	zvol_create_minors(pool);
 
 	spa_import_os(spa);
 
@@ -7137,6 +7286,9 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 			vdev_config_dirty(rvd);
 			spa_config_exit(spa, SCL_ALL, FTAG);
 		}
+
+		if (spa_should_sync_time_logger_on_unload(spa))
+			spa_unload_sync_time_logger(spa);
 
 		/*
 		 * If the log space map feature is enabled and the pool is
@@ -9096,6 +9248,8 @@ spa_async_thread(void *arg)
 		old_space += metaslab_class_get_space(spa_dedup_class(spa));
 		old_space += metaslab_class_get_space(
 		    spa_embedded_log_class(spa));
+		old_space += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 
 		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
 
@@ -9104,6 +9258,8 @@ spa_async_thread(void *arg)
 		new_space += metaslab_class_get_space(spa_dedup_class(spa));
 		new_space += metaslab_class_get_space(
 		    spa_embedded_log_class(spa));
+		new_space += metaslab_class_get_space(
+		    spa_special_embedded_log_class(spa));
 		mutex_exit(&spa_namespace_lock);
 
 		/*
@@ -10184,6 +10340,8 @@ spa_sync(spa_t *spa, uint64_t txg)
 	 */
 	brt_pending_apply(spa, txg);
 
+	spa_sync_time_logger(spa, txg);
+
 	/*
 	 * Lock out configuration changes.
 	 */
@@ -10226,6 +10384,7 @@ spa_sync(spa_t *spa, uint64_t txg)
 	dmu_tx_t *tx = dmu_tx_create_assigned(dp, txg);
 
 	spa->spa_sync_starttime = gethrtime();
+
 	taskq_cancel_id(system_delay_taskq, spa->spa_deadman_tqid);
 	spa->spa_deadman_tqid = taskq_dispatch_delay(system_delay_taskq,
 	    spa_deadman, spa, TQ_SLEEP, ddi_get_lbolt() +
@@ -10313,7 +10472,7 @@ spa_sync(spa_t *spa, uint64_t txg)
 
 	metaslab_class_evict_old(spa->spa_normal_class, txg);
 	metaslab_class_evict_old(spa->spa_log_class, txg);
-	/* spa_embedded_log_class has only one metaslab per vdev. */
+	/* Embedded log classes have only one metaslab per vdev. */
 	metaslab_class_evict_old(spa->spa_special_class, txg);
 	metaslab_class_evict_old(spa->spa_dedup_class, txg);
 
@@ -11098,6 +11257,13 @@ ZFS_MODULE_PARAM(zfs_livelist_condense, zfs_livelist_condense_, new_alloc, INT,
 	ZMOD_RW,
 	"Whether extra ALLOC blkptrs were added to a livelist entry while it "
 	"was being condensed");
+
+ZFS_MODULE_PARAM(zfs_spa, spa_, note_txg_time, UINT, ZMOD_RW,
+	"How frequently TXG timestamps are stored internally (in seconds)");
+
+ZFS_MODULE_PARAM(zfs_spa, spa_, flush_txg_time, UINT, ZMOD_RW,
+	"How frequently the TXG timestamps database should be flushed "
+	"to disk (in seconds)");
 
 #ifdef _KERNEL
 ZFS_MODULE_VIRTUAL_PARAM_CALL(zfs_zio, zio_, taskq_read,

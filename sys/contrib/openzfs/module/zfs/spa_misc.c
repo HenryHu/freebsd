@@ -715,6 +715,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	mutex_init(&spa->spa_feat_stats_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_flushed_ms_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_activities_lock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&spa->spa_txg_log_time_lock, NULL, MUTEX_DEFAULT, NULL);
 
 	cv_init(&spa->spa_async_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&spa->spa_evicting_os_cv, NULL, CV_DEFAULT, NULL);
@@ -903,6 +904,7 @@ spa_remove(spa_t *spa)
 	mutex_destroy(&spa->spa_vdev_top_lock);
 	mutex_destroy(&spa->spa_feat_stats_lock);
 	mutex_destroy(&spa->spa_activities_lock);
+	mutex_destroy(&spa->spa_txg_log_time_lock);
 
 	kmem_free(spa, sizeof (spa_t));
 }
@@ -1308,6 +1310,7 @@ spa_vdev_config_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error,
 	metaslab_class_validate(spa_log_class(spa));
 	metaslab_class_validate(spa_embedded_log_class(spa));
 	metaslab_class_validate(spa_special_class(spa));
+	metaslab_class_validate(spa_special_embedded_log_class(spa));
 	metaslab_class_validate(spa_dedup_class(spa));
 
 	spa_config_exit(spa, SCL_ALL, spa);
@@ -1896,6 +1899,8 @@ spa_get_slop_space(spa_t *spa)
 	 */
 	uint64_t embedded_log =
 	    metaslab_class_get_dspace(spa_embedded_log_class(spa));
+	embedded_log += metaslab_class_get_dspace(
+	    spa_special_embedded_log_class(spa));
 	slop -= MIN(embedded_log, slop >> 1);
 
 	/*
@@ -2001,6 +2006,12 @@ spa_special_class(spa_t *spa)
 }
 
 metaslab_class_t *
+spa_special_embedded_log_class(spa_t *spa)
+{
+	return (spa->spa_special_embedded_log_class);
+}
+
+metaslab_class_t *
 spa_dedup_class(spa_t *spa)
 {
 	return (spa->spa_dedup_class);
@@ -2009,8 +2020,7 @@ spa_dedup_class(spa_t *spa)
 boolean_t
 spa_special_has_ddt(spa_t *spa)
 {
-	return (zfs_ddt_data_is_special &&
-	    spa->spa_special_class->mc_groups != 0);
+	return (zfs_ddt_data_is_special && spa_has_special(spa));
 }
 
 /*
@@ -2019,6 +2029,9 @@ spa_special_has_ddt(spa_t *spa)
 metaslab_class_t *
 spa_preferred_class(spa_t *spa, const zio_t *zio)
 {
+	metaslab_class_t *mc = zio->io_metaslab_class;
+	boolean_t tried_dedup = (mc == spa_dedup_class(spa));
+	boolean_t tried_special = (mc == spa_special_class(spa));
 	const zio_prop_t *zp = &zio->io_prop;
 
 	/*
@@ -2036,12 +2049,10 @@ spa_preferred_class(spa_t *spa, const zio_t *zio)
 	 */
 	ASSERT(objtype != DMU_OT_INTENT_LOG);
 
-	boolean_t has_special_class = spa->spa_special_class->mc_groups != 0;
-
 	if (DMU_OT_IS_DDT(objtype)) {
-		if (spa->spa_dedup_class->mc_groups != 0)
+		if (spa_has_dedup(spa) && !tried_dedup && !tried_special)
 			return (spa_dedup_class(spa));
-		else if (has_special_class && zfs_ddt_data_is_special)
+		else if (spa_special_has_ddt(spa) && !tried_special)
 			return (spa_special_class(spa));
 		else
 			return (spa_normal_class(spa));
@@ -2050,26 +2061,28 @@ spa_preferred_class(spa_t *spa, const zio_t *zio)
 	/* Indirect blocks for user data can land in special if allowed */
 	if (zp->zp_level > 0 &&
 	    (DMU_OT_IS_FILE(objtype) || objtype == DMU_OT_ZVOL)) {
-		if (has_special_class && zfs_user_indirect_is_special)
+		if (zfs_user_indirect_is_special && spa_has_special(spa) &&
+		    !tried_special)
 			return (spa_special_class(spa));
 		else
 			return (spa_normal_class(spa));
 	}
 
 	if (DMU_OT_IS_METADATA(objtype) || zp->zp_level > 0) {
-		if (has_special_class)
+		if (spa_has_special(spa) && !tried_special)
 			return (spa_special_class(spa));
 		else
 			return (spa_normal_class(spa));
 	}
 
 	/*
-	 * Allow small file blocks in special class in some cases (like
-	 * for the dRAID vdev feature). But always leave a reserve of
+	 * Allow small file or zvol blocks in special class if opted in by
+	 * the special_smallblk property. However, always leave a reserve of
 	 * zfs_special_class_metadata_reserve_pct exclusively for metadata.
 	 */
-	if (DMU_OT_IS_FILE(objtype) &&
-	    has_special_class && zio->io_size <= zp->zp_zpl_smallblk) {
+	if ((DMU_OT_IS_FILE(objtype) || objtype == DMU_OT_ZVOL) &&
+	    spa_has_special(spa) && !tried_special &&
+	    zio->io_size <= zp->zp_zpl_smallblk) {
 		metaslab_class_t *special = spa_special_class(spa);
 		uint64_t alloc = metaslab_class_get_alloc(special);
 		uint64_t space = metaslab_class_get_space(special);
@@ -2640,6 +2653,12 @@ spa_fini(void)
 	mutex_destroy(&spa_l2cache_lock);
 }
 
+boolean_t
+spa_has_dedup(spa_t *spa)
+{
+	return (spa->spa_dedup_class->mc_groups != 0);
+}
+
 /*
  * Return whether this pool has a dedicated slog device. No locking needed.
  * It's not a problem if the wrong answer is returned as it's only for
@@ -2649,6 +2668,12 @@ boolean_t
 spa_has_slogs(spa_t *spa)
 {
 	return (spa->spa_log_class->mc_groups != 0);
+}
+
+boolean_t
+spa_has_special(spa_t *spa)
+{
+	return (spa->spa_special_class->mc_groups != 0);
 }
 
 spa_log_state_t
