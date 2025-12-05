@@ -1284,8 +1284,8 @@ snl_add_msg_attr_pf_rule(struct snl_writer *nw, uint32_t type, const struct pfct
 	snl_add_msg_attr_u8(nw, PF_RT_KEEP_STATE, r->keep_state);
 	snl_add_msg_attr_u8(nw, PF_RT_AF, r->af);
 	snl_add_msg_attr_u8(nw, PF_RT_PROTO, r->proto);
-	snl_add_msg_attr_u8(nw, PF_RT_TYPE, r->type);
-	snl_add_msg_attr_u8(nw, PF_RT_CODE, r->code);
+	snl_add_msg_attr_u16(nw, PF_RT_TYPE_2, r->type);
+	snl_add_msg_attr_u16(nw, PF_RT_CODE_2, r->code);
 	snl_add_msg_attr_u8(nw, PF_RT_FLAGS, r->flags);
 	snl_add_msg_attr_u8(nw, PF_RT_FLAGSET, r->flagset);
 	snl_add_msg_attr_u8(nw, PF_RT_MIN_TTL, r->min_ttl);
@@ -1484,7 +1484,7 @@ snl_attr_get_pf_rule_labels(struct snl_state *ss, struct nlattr *nla,
 	bool ret;
 
 	if (l->i >= PF_RULE_MAX_LABEL_COUNT)
-		return (E2BIG);
+		return (false);
 
 	ret = snl_attr_copy_string(ss, nla, (void *)PF_RULE_LABEL_SIZE,
 	    l->labels[l->i]);
@@ -1554,7 +1554,7 @@ snl_attr_get_pf_timeout(struct snl_state *ss, struct nlattr *nla,
 	bool ret;
 
 	if (t->i >= PFTM_MAX)
-		return (E2BIG);
+		return (false);
 
 	ret = snl_attr_get_uint32(ss, nla, NULL, &t->timeouts[t->i]);
 	if (ret)
@@ -1694,6 +1694,8 @@ static struct snl_attr_parser ap_getrule[] = {
 	{ .type = PF_RT_SRC_NODES_ROUTE, .off = _OUT(r.src_nodes_type[PF_SN_ROUTE]), .cb = snl_attr_get_uint64 },
 	{ .type = PF_RT_PKTRATE, .off = _OUT(r.pktrate), .arg = &pfctl_threshold_parser, .cb = snl_attr_get_nested },
 	{ .type = PF_RT_MAX_PKT_SIZE, .off =_OUT(r.max_pkt_size), .cb = snl_attr_get_uint16 },
+	{ .type = PF_RT_TYPE_2, .off = _OUT(r.type), .cb = snl_attr_get_uint16 },
+	{ .type = PF_RT_CODE_2, .off = _OUT(r.code), .cb = snl_attr_get_uint16 },
 };
 #undef _OUT
 SNL_DECLARE_PARSER(getrule_parser, struct genlmsghdr, snl_f_p_empty, ap_getrule);
@@ -2453,7 +2455,7 @@ _pfctl_table_add_addrs_h(struct pfctl_handle *h, struct pfr_table *tbl, struct p
 
 	snl_add_msg_attr_table(&nw, PF_TA_TABLE, tbl);
 	snl_add_msg_attr_u32(&nw, PF_TA_FLAGS, flags);
-	for (int i = 0; i < size && i < 256; i++)
+	for (int i = 0; i < size; i++)
 		snl_add_msg_attr_pfr_addr(&nw, PF_TA_ADDR, &addrs[i]);
 
 	if ((hdr = snl_finalize_msg(&nw)) == NULL)
@@ -2481,18 +2483,17 @@ pfctl_table_add_addrs_h(struct pfctl_handle *h, struct pfr_table *tbl, struct pf
 	int ret;
 	int off = 0;
 	int partial_added;
+	int chunk_size;
 
 	do {
-		ret = _pfctl_table_add_addrs_h(h, tbl, &addr[off], size - off, &partial_added, flags);
+		chunk_size = MIN(size - off, 256);
+		ret = _pfctl_table_add_addrs_h(h, tbl, &addr[off], chunk_size, &partial_added, flags);
 		if (ret != 0)
 			break;
 		if (nadd)
 			*nadd += partial_added;
-		off += partial_added;
+		off += chunk_size;
 	} while (off < size);
-
-	if (nadd)
-		*nadd = off;
 
 	return (ret);
 }
@@ -2521,7 +2522,7 @@ _pfctl_table_del_addrs_h(struct pfctl_handle *h, struct pfr_table *tbl, struct p
 
 	snl_add_msg_attr_table(&nw, PF_TA_TABLE, tbl);
 	snl_add_msg_attr_u32(&nw, PF_TA_FLAGS, flags);
-	for (int i = 0; i < size && i < 256; i++)
+	for (int i = 0; i < size; i++)
 		snl_add_msg_attr_pfr_addr(&nw, PF_TA_ADDR, &addrs[i]);
 
 	if ((hdr = snl_finalize_msg(&nw)) == NULL)
@@ -2572,19 +2573,18 @@ pfctl_table_del_addrs_h(struct pfctl_handle *h, struct pfr_table *tbl, struct pf
 	int ret;
 	int off = 0;
 	int partial_deleted;
+	int chunk_size;
 
 	do {
-		ret = _pfctl_table_del_addrs_h(h, tbl, &addr[off], size - off,
+		chunk_size = MIN(size - off, 256);
+		ret = _pfctl_table_del_addrs_h(h, tbl, &addr[off], chunk_size,
 		    &partial_deleted, flags);
 		if (ret != 0)
 			break;
 		if (ndel)
 			*ndel += partial_deleted;
-		off += partial_deleted;
+		off += chunk_size;
 	} while (off < size);
-
-	if (ndel)
-		*ndel = off;
 
 	return (ret);
 }
@@ -3193,6 +3193,9 @@ pfctl_get_ruleset(struct pfctl_handle *h, const char *path, uint32_t nr, struct 
 		if (! snl_parse_nlmsg(&h->ss, hdr, &ruleset_parser, rs))
 			continue;
 	}
+
+	rs->nr = nr;
+	strlcpy(rs->path, path, sizeof(rs->path));
 
 	return (e.error);
 }

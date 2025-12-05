@@ -45,7 +45,7 @@
 #include "nvme_private.h"
 #include "nvme_linux.h"
 
-static void		nvme_bio_child_inbed(struct bio *parent, int bio_error);
+static void		nvme_bio_child_inbed(struct bio *parent, int abio_error);
 static void		nvme_bio_child_done(void *arg,
 					    const struct nvme_completion *cpl);
 static uint32_t		nvme_get_num_segments(uint64_t addr, uint64_t size,
@@ -78,7 +78,7 @@ nvme_ns_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int flag,
 		break;
 	case NVME_PASSTHROUGH_CMD:
 		pt = (struct nvme_pt_command *)arg;
-		return (nvme_ctrlr_passthrough_cmd(ctrlr, pt, ns->id, 
+		return (nvme_ctrlr_passthrough_cmd(ctrlr, pt, ns->id,
 		    1 /* is_user_buffer */, 0 /* is_admin_cmd */));
 	case NVME_GET_NSID:
 	{
@@ -86,6 +86,11 @@ nvme_ns_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int flag,
 		strlcpy(gnsid->cdev, device_get_nameunit(ctrlr->dev),
 		    sizeof(gnsid->cdev));
 		gnsid->nsid = ns->id;
+		break;
+	}
+	case DIOCGIDENT: {
+		uint8_t *sn = arg;
+		nvme_ctrlr_get_ident(ctrlr, sn);
 		break;
 	}
 	case DIOCGMEDIASIZE:
@@ -129,7 +134,6 @@ static int
 nvme_ns_close(struct cdev *dev __unused, int flags, int fmt __unused,
     struct thread *td)
 {
-
 	return (0);
 }
 
@@ -231,7 +235,6 @@ nvme_ns_get_model_number(struct nvme_namespace *ns)
 const struct nvme_namespace_data *
 nvme_ns_get_data(struct nvme_namespace *ns)
 {
-
 	return (&ns->data);
 }
 
@@ -276,14 +279,14 @@ nvme_ns_bio_done(void *arg, const struct nvme_completion *status)
 }
 
 static void
-nvme_bio_child_inbed(struct bio *parent, int bio_error)
+nvme_bio_child_inbed(struct bio *parent, int abio_error)
 {
 	struct nvme_completion	parent_cpl;
 	int			children, inbed;
 
-	if (bio_error != 0) {
+	if (abio_error != 0) {
 		parent->bio_flags |= BIO_ERROR;
-		parent->bio_error = bio_error;
+		parent->bio_error = abio_error;
 	}
 
 	/*
@@ -310,12 +313,12 @@ nvme_bio_child_done(void *arg, const struct nvme_completion *cpl)
 {
 	struct bio		*child = arg;
 	struct bio		*parent;
-	int			bio_error;
+	int			abio_error;
 
 	parent = child->bio_parent;
 	g_destroy_bio(child);
-	bio_error = nvme_completion_is_error(cpl) ? EIO : 0;
-	nvme_bio_child_inbed(parent, bio_error);
+	abio_error = nvme_completion_is_error(cpl) ? EIO : 0;
+	nvme_bio_child_inbed(parent, abio_error);
 }
 
 static uint32_t
@@ -559,8 +562,10 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	 * standard says the entire id will be zeros, so this is a
 	 * cheap way to test for that.
 	 */
-	if (ns->data.nsze == 0)
-		return (ENXIO);
+	if (ns->data.nsze == 0) {
+		ns->flags |= NVME_NS_GONE;
+		return ((ns->flags & NVME_NS_ADDED) ? 0 : ENXIO);
+	}
 
 	flbas_fmt = NVMEV(NVME_NS_DATA_FLBAS_FORMAT, ns->data.flbas);
 
@@ -624,6 +629,7 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 	ns->cdev->si_drv2 = make_dev_alias(ns->cdev, "%sns%d",
 	    device_get_nameunit(ctrlr->dev), ns->id);
 	ns->cdev->si_flags |= SI_UNMAPPED;
+	ns->flags |= NVME_NS_ADDED;
 
 	return (0);
 }
@@ -631,7 +637,6 @@ nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 void
 nvme_ns_destruct(struct nvme_namespace *ns)
 {
-
 	if (ns->cdev != NULL) {
 		if (ns->cdev->si_drv2 != NULL)
 			destroy_dev(ns->cdev->si_drv2);

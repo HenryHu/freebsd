@@ -33,7 +33,7 @@
  * Copyright (c) 2017, Intel Corporation.
  * Copyright (c) 2019, loli10K <ezomori.nozomu@gmail.com>
  * Copyright (c) 2021, Colm Buckley <colm@tuatha.org>
- * Copyright (c) 2021, 2023, Klara Inc.
+ * Copyright (c) 2021, 2023, 2025, Klara, Inc.
  * Copyright (c) 2021, 2025 Hewlett Packard Enterprise Development LP.
  */
 
@@ -456,7 +456,7 @@ get_usage(zpool_help_t idx)
 		    "<pool> <vdev> ...\n"));
 	case HELP_ATTACH:
 		return (gettext("\tattach [-fsw] [-o property=value] "
-		    "<pool> <device> <new-device>\n"));
+		    "<pool> <vdev> <new-device>\n"));
 	case HELP_CLEAR:
 		return (gettext("\tclear [[--power]|[-nF]] <pool> [device]\n"));
 	case HELP_CREATE:
@@ -494,8 +494,7 @@ get_usage(zpool_help_t idx)
 		    "[--json-int, --json-pool-key-guid]] ...\n"
 		    "\t    [-T d|u] [pool] [interval [count]]\n"));
 	case HELP_PREFETCH:
-		return (gettext("\tprefetch -t <type> [<type opts>] <pool>\n"
-		    "\t    -t ddt <pool>\n"));
+		return (gettext("\tprefetch [-t <type>] <pool>\n"));
 	case HELP_OFFLINE:
 		return (gettext("\toffline [--power]|[[-f][-t]] <pool> "
 		    "<device> ...\n"));
@@ -752,10 +751,11 @@ usage(boolean_t requested)
 }
 
 /*
- * zpool initialize [-c | -s | -u] [-w] <pool> [<vdev> ...]
+ * zpool initialize [-c | -s | -u] [-w] <-a | pool> [<vdev> ...]
  * Initialize all unused blocks in the specified vdevs, or all vdevs in the pool
  * if none specified.
  *
+ *	-a	Use all pools.
  *	-c	Cancel. Ends active initializing.
  *	-s	Suspend. Initializing can then be restarted with no flags.
  *	-u	Uninitialize. Clears initialization state.
@@ -776,7 +776,7 @@ zpool_do_initialize(int argc, char **argv)
 		{"suspend",	no_argument,		NULL, 's'},
 		{"uninit",	no_argument,		NULL, 'u'},
 		{"wait",	no_argument,		NULL, 'w'},
-		{"all", 	no_argument,		NULL, 'a'},
+		{"all",		no_argument,		NULL, 'a'},
 		{0, 0, 0, 0}
 	};
 
@@ -4199,7 +4199,7 @@ zpool_do_checkpoint(int argc, char **argv)
 #define	CHECKPOINT_OPT	1024
 
 /*
- * zpool prefetch <type> [<type opts>] <pool>
+ * zpool prefetch [-t <type>] <pool>
  *
  * Prefetchs a particular type of data in the specified pool.
  */
@@ -4244,20 +4244,27 @@ zpool_do_prefetch(int argc, char **argv)
 
 	poolname = argv[0];
 
-	argc--;
-	argv++;
-
-	if (strcmp(typestr, "ddt") == 0) {
-		type = ZPOOL_PREFETCH_DDT;
-	} else {
-		(void) fprintf(stderr, gettext("unsupported prefetch type\n"));
-		usage(B_FALSE);
-	}
-
 	if ((zhp = zpool_open(g_zfs, poolname)) == NULL)
 		return (1);
 
-	err = zpool_prefetch(zhp, type);
+	if (typestr == NULL) {
+		/* Prefetch all types */
+		err = zpool_prefetch(zhp, ZPOOL_PREFETCH_DDT);
+		if (err == 0)
+			err = zpool_prefetch(zhp, ZPOOL_PREFETCH_BRT);
+	} else {
+		if (strcmp(typestr, "ddt") == 0) {
+			type = ZPOOL_PREFETCH_DDT;
+		} else if (strcmp(typestr, "brt") == 0) {
+			type = ZPOOL_PREFETCH_BRT;
+		} else {
+			(void) fprintf(stderr,
+			    gettext("unsupported prefetch type\n"));
+			zpool_close(zhp);
+			usage(B_FALSE);
+		}
+		err = zpool_prefetch(zhp, type);
+	}
 
 	zpool_close(zhp);
 
@@ -5760,24 +5767,6 @@ children:
 	return (ret);
 }
 
-static int
-refresh_iostat(zpool_handle_t *zhp, void *data)
-{
-	iostat_cbdata_t *cb = data;
-	boolean_t missing;
-
-	/*
-	 * If the pool has disappeared, remove it from the list and continue.
-	 */
-	if (zpool_refresh_stats(zhp, &missing) != 0)
-		return (-1);
-
-	if (missing)
-		pool_list_remove(cb->cb_list, zhp);
-
-	return (0);
-}
-
 /*
  * Callback to print out the iostats for the given pool.
  */
@@ -6358,15 +6347,14 @@ get_namewidth_iostat(zpool_handle_t *zhp, void *data)
  * This command can be tricky because we want to be able to deal with pool
  * creation/destruction as well as vdev configuration changes.  The bulk of this
  * processing is handled by the pool_list_* routines in zpool_iter.c.  We rely
- * on pool_list_update() to detect the addition of new pools.  Configuration
- * changes are all handled within libzfs.
+ * on pool_list_refresh() to detect the addition and removal of pools.
+ * Configuration changes are all handled within libzfs.
  */
 int
 zpool_do_iostat(int argc, char **argv)
 {
 	int c;
 	int ret;
-	int npools;
 	float interval = 0;
 	unsigned long count = 0;
 	zpool_list_t *list;
@@ -6617,25 +6605,30 @@ zpool_do_iostat(int argc, char **argv)
 		return (1);
 	}
 
+	int last_npools = 0;
 	for (;;) {
-		if ((npools = pool_list_count(list)) == 0)
+		/*
+		 * Refresh all pools in list, adding or removing pools as
+		 * necessary.
+		 */
+		int npools = pool_list_refresh(list);
+		if (npools == 0) {
 			(void) fprintf(stderr, gettext("no pools available\n"));
-		else {
+		} else {
+			/*
+			 * If the list of pools has changed since last time
+			 * around, reset the iteration count to force the
+			 * header to be redisplayed.
+			 */
+			if (last_npools != npools)
+				cb.cb_iteration = 0;
+
 			/*
 			 * If this is the first iteration and -y was supplied
 			 * we skip any printing.
 			 */
 			boolean_t skip = (omit_since_boot &&
 			    cb.cb_iteration == 0);
-
-			/*
-			 * Refresh all statistics.  This is done as an
-			 * explicit step before calculating the maximum name
-			 * width, so that any * configuration changes are
-			 * properly accounted for.
-			 */
-			(void) pool_list_iter(list, B_FALSE, refresh_iostat,
-			    &cb);
 
 			/*
 			 * Iterate over all pools to determine the maximum width
@@ -6690,6 +6683,7 @@ zpool_do_iostat(int argc, char **argv)
 			if (skip) {
 				(void) fflush(stdout);
 				(void) fsleep(interval);
+				last_npools = npools;
 				continue;
 			}
 
@@ -6727,6 +6721,8 @@ zpool_do_iostat(int argc, char **argv)
 
 		(void) fflush(stdout);
 		(void) fsleep(interval);
+
+		last_npools = npools;
 	}
 
 	pool_list_free(list);
@@ -7643,7 +7639,7 @@ zpool_do_replace(int argc, char **argv)
 }
 
 /*
- * zpool attach [-fsw] [-o property=value] <pool> <device>|<vdev> <new_device>
+ * zpool attach [-fsw] [-o property=value] <pool> <vdev> <new_device>
  *
  *	-f	Force attach, even if <new_device> appears to be in use.
  *	-s	Use sequential instead of healing reconstruction for resilver.
@@ -7651,9 +7647,9 @@ zpool_do_replace(int argc, char **argv)
  *	-w	Wait for resilvering (mirror) or expansion (raidz) to complete
  *		before returning.
  *
- * Attach <new_device> to a <device> or <vdev>, where the vdev can be of type
- * mirror or raidz. If <device> is not part of a mirror, then <device> will
- * be transformed into a mirror of <device> and <new_device>. When a mirror
+ * Attach <new_device> to a <vdev>, where the vdev can be of type
+ * device, mirror or raidz. If <vdev> is not part of a mirror, then <vdev> will
+ * be transformed into a mirror of <vdev> and <new_device>. When a mirror
  * is involved, <new_device> will begin life with a DTL of [0, now], and will
  * immediately begin to resilver itself. For the raidz case, a expansion will
  * commence and reflow the raidz data across all the disks including the
@@ -8446,8 +8442,9 @@ date_string_to_sec(const char *timestr, boolean_t rounding)
 }
 
 /*
- * zpool scrub [-e | -s | -p | -C | -E | -S] [-w] <pool> ...
+ * zpool scrub [-e | -s | -p | -C | -E | -S] [-w] [-a | <pool> ...]
  *
+ *	-a	Scrub all pools.
  *	-e	Only scrub blocks in the error log.
  *	-E	End date of scrub.
  *	-S	Start date of scrub.
@@ -8621,8 +8618,9 @@ zpool_do_resilver(int argc, char **argv)
 }
 
 /*
- * zpool trim [-d] [-r <rate>] [-c | -s] <pool> [<device> ...]
+ * zpool trim [-d] [-r <rate>] [-c | -s] <-a | pool> [<device> ...]
  *
+ *	-a		Trim all pools.
  *	-c		Cancel. Ends any in-progress trim.
  *	-d		Secure trim.  Requires kernel and device support.
  *	-r <rate>	Sets the TRIM rate in bytes (per second). Supports
@@ -12374,7 +12372,7 @@ zpool_do_events_next(ev_opts_t *opts)
 		nvlist_free(nvl);
 	}
 
-	VERIFY(0 == close(zevent_fd));
+	VERIFY0(close(zevent_fd));
 
 	return (ret);
 }

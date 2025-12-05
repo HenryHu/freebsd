@@ -67,6 +67,7 @@
 #include <net/route/nhop.h>
 #include <net/pfil.h>
 #include <net/vnet.h>
+#include <net/if_gif.h>
 #include <net/if_pfsync.h>
 
 #include <netpfil/pf/pf_mtag.h>
@@ -1757,6 +1758,12 @@ do {								\
 				PULLUP_TO(hlen, ulp, struct ip);
 				break;
 
+			case IPPROTO_ETHERIP:	/* RFC 3378 */
+				PULLUP_LEN(hlen, ulp,
+				    sizeof(struct etherip_header) +
+				    sizeof(struct ether_header));
+				break;
+
 			case IPPROTO_PFSYNC:
 				PULLUP_TO(hlen, ulp, struct pfsync_header);
 				break;
@@ -2113,8 +2120,8 @@ do {								\
 							pkey = &args->f_id.dst_ip6;
 						else
 							pkey = &args->f_id.src_ip6;
-					} else /* only for L3 */
-						break;
+					}
+					break;
 				case LOOKUP_DSCP:
 					if (is_ipv4)
 						key = ip->ip_tos >> 2;

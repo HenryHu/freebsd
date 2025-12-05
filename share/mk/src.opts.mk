@@ -66,6 +66,7 @@ __DEFAULT_YES_OPTIONS = \
     AUTOFS \
     BHYVE \
     BLACKLIST \
+    BLOCKLIST \
     BLUETOOTH \
     BOOT \
     BOOTPARAMD \
@@ -80,7 +81,6 @@ __DEFAULT_YES_OPTIONS = \
     CDDL \
     CLANG \
     CLANG_BOOTSTRAP \
-    CLEAN \
     CPP \
     CROSS_COMPILER \
     CRYPT \
@@ -124,7 +124,6 @@ __DEFAULT_YES_OPTIONS = \
     LEGACY_CONSOLE \
     LLD \
     LLD_BOOTSTRAP \
-    LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_COV \
     LLVM_CXXFILT \
@@ -144,6 +143,7 @@ __DEFAULT_YES_OPTIONS = \
     MAIL \
     MAILWRAPPER \
     MAKE \
+    MALLOC_PRODUCTION \
     MITKRB5 \
     MLX5TOOL \
     NETCAT \
@@ -161,7 +161,6 @@ __DEFAULT_YES_OPTIONS = \
     PKGBOOTSTRAP \
     PMC \
     PPP \
-    PTHREADS_ASSERTIONS \
     QUOTAS \
     RADIUS_SUPPORT \
     RBOOTD \
@@ -201,6 +200,7 @@ __DEFAULT_NO_OPTIONS = \
     BHYVE_SNAPSHOT \
     CLANG_EXTRAS \
     CLANG_FORMAT \
+    CLEAN \
     DIALOG \
     DETECT_TZ_CHANGES \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
@@ -210,11 +210,11 @@ __DEFAULT_NO_OPTIONS = \
     HESIOD \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
+    LLVM_ASSERTIONS \
     LLVM_FULL_DEBUGINFO \
-    MALLOC_PRODUCTION \
     OFED_EXTRA \
     OPENLDAP \
-    REPRODUCIBLE_BUILD \
+    PTHREADS_ASSERTIONS \
     RPCBIND_WARMSTART_SUPPORT \
     SORT_THREADS \
     ZONEINFO_LEAPSECONDS_SUPPORT \
@@ -243,6 +243,7 @@ __LIBC_MALLOC_DEFAULT=	jemalloc
 #
 .for var in \
     BLACKLIST \
+    BLOCKLIST \
     BZIP2 \
     INET \
     INET6 \
@@ -296,9 +297,9 @@ __DEFAULT_NO_OPTIONS+=LLVM_TARGET_BPF LLVM_TARGET_MIPS
 .include <bsd.compiler.mk>
 
 .if ${__T} == "i386" || ${__T} == "amd64"
-__DEFAULT_NO_OPTIONS += FDT
+__DEFAULT_NO_OPTIONS+=FDT
 .else
-__DEFAULT_YES_OPTIONS += FDT
+__DEFAULT_YES_OPTIONS+=FDT
 .endif
 
 .if ${__T:Marm*} == "" && ${__T:Mriscv64*} == ""
@@ -390,6 +391,14 @@ BROKEN_OPTIONS+= TESTS
 .if ${MK_SOURCELESS} == "no"
 MK_SOURCELESS_HOST:=	no
 MK_SOURCELESS_UCODE:= no
+.endif
+
+.if ${MK_BLACKLIST} == "no"
+MK_BLOCKLIST:=	no
+.endif
+
+.if ${MK_BLACKLIST_SUPPORT} == "no"
+MK_BLOCKLIST_SUPPORT:=	no
 .endif
 
 .if ${MK_CDDL} == "no"
@@ -508,7 +517,7 @@ MK_LOADER_VERIEXEC_PASS_MANIFEST := no
 # MK_* options whose default value depends on another option.
 #
 .for vv in \
-    GSSAPI/KERBEROS \
+    KERBEROS_SUPPORT/KERBEROS \
     MAN_UTILS/MAN
 .if defined(WITH_${vv:H})
 MK_${vv:H}:=	yes
@@ -518,9 +527,5 @@ MK_${vv:H}:=	no
 MK_${vv:H}:=	${MK_${vv:T}}
 .endif
 .endfor
-
-#
-# Set defaults for the MK_*_SUPPORT variables.
-#
 
 .endif #  !target(__<src.opts.mk>__)

@@ -51,9 +51,42 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
-# 20250810: Removal of remaining Secure RPC (DES) bits
-OLD_FILES+=usr/sbin/rpc.ypupdated
-OLD_FILES+=etc/rc.d/ypupdated
+# 20251121: Remove duplicate pam_krb5 manual page
+OLD_FILES+=usr/share/man/man8/pam-krb5.8.gz
+
+# 20251112: Remove pccard(4) and related
+OLD_FILES+=usr/share/man/man4/pccard.4.gz
+OLD_FILES+=usr/share/man/man4/pcic.4.gz
+
+# 20251006: Remove libnss_tacplus.a (it never should have been installed)
+OLD_FILES+=usr/lib/libnss_tacplus.a
+
+# 20251003: kgdb python scripts moved
+OLD_FILES+=usr/libexec/kgdb/acttrace.py
+OLD_DIRS+=usr/libexec/kgdb
+
+# 20250930: Rename wlanstats to wlanstat
+OLD_FILES+=usr/sbin/wlanstats
+OLD_FILES+=usr/share/man/man8/wlanstats.8.gz
+
+# 20250929: Remove ftpd(8)
+OLD_FILES+=etc/rc.d/ftpd
+OLD_FILES+=usr/libexec/ftpd
+OLD_FILES+=usr/share/man/man5/ftpchroot.5.gz
+OLD_FILES+=usr/share/man/man8/ftpd.8.gz
+
+# 20250917: Remove a miscapitalized manual
+OLD_FILES+=usr/share/man/man9/vnet.9.gz
+OLD_FILES+=usr/share/man/man9/vimage.9.gz
+
+# 20250911: This tool is no longer needed
+OLD_FILES+=usr/tests/bin/cp/sparse
+
+# 20250826: Remove a misspelled manual
+OLD_FILES+=usr/share/man/man3/sysdecode_syscallnames.3.gz
+
+# 20250812: Remove a bogus manlink
+OLD_FILES+=usr/share/man/man3/quota_statfs.3.gz
 
 # 20250808: nvmfd removed from base install
 OLD_FILES+=usr/sbin/nvmfd
@@ -61,6 +94,8 @@ OLD_FILES+=usr/share/man/man8/nvmfd.8.gz
 
 # 20250807: Replace lib/libgssapi with krb5/lib/gssapi
 OLD_FILES+=usr/include/gssapi_krb5/gssapi.h
+OLD_FILES+=usr/include/gssapi_krb5/gssapi/gssapi.h
+OLD_FILES+=usr/include/gssapi_krb5/gssapi/mechglue.h
 OLD_DIRS+=usr/include/gssapi_krb5/gssapi
 OLD_DIRS+=usr/include/gssapi_krb5
 OLD_FILES+=etc/gssapi/qop
@@ -75,7 +110,6 @@ OLD_FILES+=usr/lib/libopencsd.so
 
 # 20250801: Move compile_et to /usr/sbin
 OLD_FILES+=usr/share/et/compile_et
-OLD_DIRS+=usr/share/et
 
 # 20250728: zfsboot (MBR) removed
 OLD_FILES+=boot/zfsboot
@@ -83,6 +117,9 @@ OLD_FILES+=usr/share/man/man8/zfsboot.8.gz
 
 # 20250728: Machine versions of 'runq.h' do not exist anymore
 OLD_FILES+=usr/include/machine/runq.h
+
+# 20250727: libvmmapi bumped to 7
+OLD_LIBS+=usr/lib/libvmmapi.so.6
 
 # 20250726: MIT KRB5 DSO bump
 OLD_LIBS+=usr/lib/libcom_err.so.121

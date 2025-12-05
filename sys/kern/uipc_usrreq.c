@@ -154,15 +154,12 @@ static struct task	unp_defer_task;
  * and don't really want to reserve the sendspace.  Their recvspace should be
  * large enough for at least one max-size datagram plus address.
  */
-#ifndef PIPSIZ
-#define	PIPSIZ	8192
-#endif
-static u_long	unpst_sendspace = PIPSIZ;
-static u_long	unpst_recvspace = PIPSIZ;
+static u_long	unpst_sendspace = 64*1024;
+static u_long	unpst_recvspace = 64*1024;
 static u_long	unpdg_maxdgram = 8*1024;	/* support 8KB syslog msgs */
 static u_long	unpdg_recvspace = 16*1024;
-static u_long	unpsp_sendspace = PIPSIZ;
-static u_long	unpsp_recvspace = PIPSIZ;
+static u_long	unpsp_sendspace = 64*1024;
+static u_long	unpsp_recvspace = 64*1024;
 
 static SYSCTL_NODE(_net, PF_LOCAL, local, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Local domain");
@@ -796,12 +793,18 @@ uipc_connect2(struct socket *so1, struct socket *so2)
 }
 
 static void
+maybe_schedule_gc(void)
+{
+	if (atomic_load_int(&unp_rights) != 0)
+		taskqueue_enqueue_timeout(taskqueue_thread, &unp_gc_task, -1);
+}
+
+static void
 uipc_detach(struct socket *so)
 {
 	struct unpcb *unp, *unp2;
 	struct mtx *vplock;
 	struct vnode *vp;
-	int local_unp_rights;
 
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("uipc_detach: unp == NULL"));
@@ -857,7 +860,6 @@ uipc_detach(struct socket *so)
 	UNP_REF_LIST_UNLOCK();
 
 	UNP_PCB_LOCK(unp);
-	local_unp_rights = unp_rights;
 	unp->unp_socket->so_pcb = NULL;
 	unp->unp_socket = NULL;
 	free(unp->unp_addr, M_SONAME);
@@ -868,8 +870,7 @@ uipc_detach(struct socket *so)
 		mtx_unlock(vplock);
 		vrele(vp);
 	}
-	if (local_unp_rights)
-		taskqueue_enqueue_timeout(taskqueue_thread, &unp_gc_task, -1);
+	maybe_schedule_gc();
 
 	switch (so->so_type) {
 	case SOCK_STREAM:
@@ -903,6 +904,18 @@ uipc_disconnect(struct socket *so)
 	else
 		UNP_PCB_UNLOCK(unp);
 	return (0);
+}
+
+static void
+uipc_fdclose(struct socket *so __unused)
+{
+	/*
+	 * Ensure that userspace can't create orphaned file descriptors without
+	 * triggering garbage collection.  Triggering GC from uipc_detach() is
+	 * not sufficient, since that's only closed once a socket reference
+	 * count drops to zero.
+	 */
+	maybe_schedule_gc();
 }
 
 static int
@@ -1072,6 +1085,21 @@ uipc_stream_sbspace(struct sockbuf *sb)
 	return (min(space, mbspace));
 }
 
+/*
+ * UNIX version of generic sbwait() for writes.  We wait on peer's receive
+ * buffer, using our timeout.
+ */
+static int
+uipc_stream_sbwait(struct socket *so, sbintime_t timeo)
+{
+	struct sockbuf *sb = &so->so_rcv;
+
+	SOCK_RECVBUF_LOCK_ASSERT(so);
+	sb->sb_flags |= SB_WAIT;
+	return (msleep_sbt(&sb->sb_acc, SOCK_RECVBUF_MTX(so), PSOCK | PCATCH,
+	    "sbwait", timeo, 0, 0));
+}
+
 static int
 uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
     struct uio *uio0, struct mbuf *m, struct mbuf *c, int flags,
@@ -1206,7 +1234,8 @@ restart:
 				error = EWOULDBLOCK;
 				goto out4;
 			}
-			if ((error = sbwait(so2, SO_RCV)) != 0) {
+			if ((error = uipc_stream_sbwait(so2,
+			    so->so_snd.sb_timeo)) != 0) {
 				SOCK_RECVBUF_UNLOCK(so2);
 				goto out4;
 			} else
@@ -1810,9 +1839,7 @@ uipc_filt_sowrite(struct knote *kn, long hint)
 	kn->kn_data = uipc_stream_sbspace(&so2->so_rcv);
 
 	if (so2->so_rcv.sb_state & SBS_CANTRCVMORE) {
-		/*
-		 * XXXGL: maybe kn->kn_flags |= EV_EOF ?
-		 */
+		kn->kn_flags |= EV_EOF;
 		return (1);
 	} else if (kn->kn_sfflags & NOTE_LOWAT)
 		return (kn->kn_data >= kn->kn_sdata);
@@ -1840,11 +1867,13 @@ static const struct filterops uipc_write_filtops = {
 	.f_isfd = 1,
 	.f_detach = uipc_filt_sowdetach,
 	.f_event = uipc_filt_sowrite,
+	.f_copy = knote_triv_copy,
 };
 static const struct filterops uipc_empty_filtops = {
 	.f_isfd = 1,
 	.f_detach = uipc_filt_sowdetach,
 	.f_event = uipc_filt_soempty,
+	.f_copy = knote_triv_copy,
 };
 
 static int
@@ -2402,7 +2431,7 @@ uipc_sendfile_wait(struct socket *so, off_t need, int *space)
 		}
 		if (!sockref)
 			soref(so2);
-		error = sbwait(so2, SO_RCV);
+		error = uipc_stream_sbwait(so2, so->so_snd.sb_timeo);
 		if (error == 0 &&
 		    __predict_false(sb->sb_state & SBS_CANTRCVMORE))
 			error = EPIPE;
@@ -3199,11 +3228,9 @@ unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 #endif
 		LIST_REMOVE(unp, unp_reflink);
 		UNP_REF_LIST_UNLOCK();
-		if (so) {
-			SOCK_LOCK(so);
-			so->so_state &= ~SS_ISCONNECTED;
-			SOCK_UNLOCK(so);
-		}
+		SOCK_LOCK(so);
+		so->so_state &= ~SS_ISCONNECTED;
+		SOCK_UNLOCK(so);
 		break;
 
 	case SOCK_STREAM:
@@ -3672,11 +3699,14 @@ unp_internalize(struct mbuf *control, struct mchain *mc, struct thread *td)
 			cmcred->cmcred_uid = td->td_ucred->cr_ruid;
 			cmcred->cmcred_gid = td->td_ucred->cr_rgid;
 			cmcred->cmcred_euid = td->td_ucred->cr_uid;
-			cmcred->cmcred_ngroups = MIN(td->td_ucred->cr_ngroups,
+			_Static_assert(CMGROUP_MAX >= 1,
+			    "Room needed for the effective GID.");
+			cmcred->cmcred_ngroups = MIN(td->td_ucred->cr_ngroups + 1,
 			    CMGROUP_MAX);
-			for (i = 0; i < cmcred->cmcred_ngroups; i++)
+			cmcred->cmcred_groups[0] = td->td_ucred->cr_gid;
+			for (i = 1; i < cmcred->cmcred_ngroups; i++)
 				cmcred->cmcred_groups[i] =
-				    td->td_ucred->cr_groups[i];
+				    td->td_ucred->cr_groups[i - 1];
 			break;
 
 		case SCM_RIGHTS:
@@ -4188,10 +4218,12 @@ unp_gc(__unused void *arg, int pending)
 		struct socket *so;
 
 		so = unref[i]->f_data;
-		CURVNET_SET(so->so_vnet);
-		socantrcvmore(so);
-		unp_dispose(so);
-		CURVNET_RESTORE();
+		if (!SOLISTENING(so)) {
+			CURVNET_SET(so->so_vnet);
+			socantrcvmore(so);
+			unp_dispose(so);
+			CURVNET_RESTORE();
+		}
 	}
 
 	/*
@@ -4358,6 +4390,7 @@ static struct protosw streamproto = {
 	.pr_connect2 =		uipc_connect2,
 	.pr_detach =		uipc_detach,
 	.pr_disconnect =	uipc_disconnect,
+	.pr_fdclose =		uipc_fdclose,
 	.pr_listen =		uipc_listen,
 	.pr_peeraddr =		uipc_peeraddr,
 	.pr_send =		uipc_sendfile,
@@ -4388,6 +4421,7 @@ static struct protosw dgramproto = {
 	.pr_connect2 =		uipc_connect2,
 	.pr_detach =		uipc_detach,
 	.pr_disconnect =	uipc_disconnect,
+	.pr_fdclose =		uipc_fdclose,
 	.pr_peeraddr =		uipc_peeraddr,
 	.pr_sosend =		uipc_sosend_dgram,
 	.pr_sense =		uipc_sense,
@@ -4412,6 +4446,7 @@ static struct protosw seqpacketproto = {
 	.pr_connect2 =		uipc_connect2,
 	.pr_detach =		uipc_detach,
 	.pr_disconnect =	uipc_disconnect,
+	.pr_fdclose =		uipc_fdclose,
 	.pr_listen =		uipc_listen,
 	.pr_peeraddr =		uipc_peeraddr,
 	.pr_sense =		uipc_sense,
